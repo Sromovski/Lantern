@@ -76,12 +76,17 @@ export function runChecks(ctx: DoctorContext): CheckResult[] {
   const integrity = db.pragma('integrity_check', { simple: true });
   out.push(result('db.integrity', integrity === 'ok' ? 'ok' : 'fail', String(integrity)));
 
-  const pending = pendingMigrations(db, ctx.migrationsDir);
-  out.push(
-    pending.length === 0
-      ? result('db.migrations', 'ok', 'up to date')
-      : result('db.migrations', 'fail', `pending: ${pending.join(', ')} — run \`lantern migrate\``),
-  );
+  let pending: string[] | undefined;
+  try {
+    pending = pendingMigrations(db, ctx.migrationsDir);
+    out.push(
+      pending.length === 0
+        ? result('db.migrations', 'ok', 'up to date')
+        : result('db.migrations', 'fail', `pending: ${pending.join(', ')} — run \`lantern migrate\``),
+    );
+  } catch (err) {
+    out.push(result('db.migrations', 'fail', err instanceof Error ? err.message : String(err)));
+  }
 
   let config: LanternConfig | undefined;
   try {
@@ -92,7 +97,7 @@ export function runChecks(ctx: DoctorContext): CheckResult[] {
     out.push(result('config.valid', 'fail', err.issues.join('; ')));
   }
 
-  if (config && pending.length === 0) {
+  if (config && pending !== undefined && pending.length === 0) {
     const ids = new Map<LoadedChannel, number>();
     const missing: string[] = [];
     for (const channel of config.channels) {

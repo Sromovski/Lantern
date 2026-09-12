@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openDb } from '../../src/db/connection.js';
 import { MIGRATIONS_DIR } from '../../src/db/migrate.js';
 import { loadConfig } from '../../src/config/load.js';
@@ -42,6 +45,20 @@ describe('runChecks', () => {
     const ctx = healthyCtx({ db: openDb(':memory:') });
     expect(byName(ctx, 'db.migrations')?.status).toBe('fail');
     expect(exitCode(runChecks(ctx))).toBe(1);
+  });
+
+  it('reports a bad migration filename as a failed check without throwing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lantern-migrations-'));
+    writeFileSync(join(dir, '002-bad.sql'), 'CREATE TABLE t (id INTEGER PRIMARY KEY);');
+    const ctx = healthyCtx({ migrationsDir: dir });
+    let results: ReturnType<typeof runChecks> = [];
+    expect(() => {
+      results = runChecks(ctx);
+    }).not.toThrow();
+    const migrations = results.find((r) => r.name === 'db.migrations');
+    expect(migrations?.status).toBe('fail');
+    expect(migrations?.detail).toContain('invalid migration filename');
+    expect(results.find((r) => r.name.startsWith('channel.'))).toBeUndefined();
   });
 
   it('fails when config has not been synced', () => {

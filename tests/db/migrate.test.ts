@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openDb } from '../../src/db/connection.js';
 import { migrate, pendingMigrations, MIGRATIONS_DIR } from '../../src/db/migrate.js';
 import { testDb, seedPublicationChain } from '../helpers/db.js';
+
+function tempMigrationsDir(files: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'lantern-migrations-'));
+  for (const [name, contents] of Object.entries(files)) writeFileSync(join(dir, name), contents);
+  return dir;
+}
 
 const TABLES = [
   'verticals', 'channels', 'subjects', 'items', 'sources', 'images',
@@ -34,6 +43,34 @@ describe('migrate', () => {
         "INSERT INTO items (vertical_id, kind, body, body_hash, status, created_at) VALUES (999, 'quote', 'x', 'h', 'raw', 'now')",
       ).run(),
     ).toThrow(/FOREIGN KEY/);
+  });
+
+  it('throws on a badly named migration file instead of silently skipping it', () => {
+    const dir = tempMigrationsDir({
+      '001_ok.sql': "CREATE TABLE t (id INTEGER PRIMARY KEY);",
+      '002-bad.sql': "CREATE TABLE u (id INTEGER PRIMARY KEY);",
+    });
+    const db = openDb(':memory:');
+    expect(() => migrate(db, dir)).toThrow(/invalid migration filename: 002-bad\.sql/);
+  });
+
+  it('throws on duplicate migration numbers', () => {
+    const dir = tempMigrationsDir({
+      '001_a.sql': "CREATE TABLE t (id INTEGER PRIMARY KEY);",
+      '001_b.sql': "CREATE TABLE u (id INTEGER PRIMARY KEY);",
+    });
+    const db = openDb(':memory:');
+    expect(() => migrate(db, dir)).toThrow(/duplicate migration number 001/);
+  });
+
+  it('ignores non-.sql files such as a README', () => {
+    const dir = tempMigrationsDir({
+      '001_ok.sql': "CREATE TABLE t (id INTEGER PRIMARY KEY);",
+      'notes.txt': 'not a migration',
+    });
+    const db = openDb(':memory:');
+    const result = migrate(db, dir);
+    expect(result.applied).toEqual(['001_ok.sql']);
   });
 
   it('makes double-posting the same post to the same channel impossible', () => {

@@ -14,7 +14,24 @@ function ensureTable(db: Db): void {
 }
 
 function migrationFiles(dir: string): string[] {
-  return readdirSync(dir).filter((f) => MIGRATION_FILE.test(f)).sort();
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+
+  const byPrefix = new Map<string, string>();
+  for (const f of files) {
+    if (!MIGRATION_FILE.test(f)) {
+      throw new Error(`invalid migration filename: ${f} (expected NNN_lower_snake_case.sql)`);
+    }
+    const prefix = f.slice(0, 3);
+    const existing = byPrefix.get(prefix);
+    if (existing !== undefined) {
+      throw new Error(`duplicate migration number ${prefix}: ${existing}, ${f}`);
+    }
+    byPrefix.set(prefix, f);
+  }
+
+  return files;
 }
 
 export function pendingMigrations(db: Db, dir: string): string[] {
