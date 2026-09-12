@@ -30,4 +30,15 @@ describe('runStage', () => {
     const [, end] = rows(db);
     expect(end).toMatchObject({ ok: 0, detail: { phase: 'end', error: 'gutendex timeout' } });
   });
+
+  it('records non-Error throws in run_log', async () => {
+    const db = testDb();
+    await expect(
+      runStage(db, { stage: 'publish' }, async () => {
+        throw 'quota exhausted';
+      }),
+    ).rejects.toEqual('quota exhausted');
+    const [, end] = rows(db);
+    expect(end).toMatchObject({ ok: 0, detail: { phase: 'end', error: 'quota exhausted' } });
+  });
 });

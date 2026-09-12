@@ -26,7 +26,7 @@ export async function runStage<T>(
     log(true, { phase: 'end', ms: Date.now() - started, result: result ?? null });
     return result;
   } catch (err) {
-    log(false, { phase: 'end', ms: Date.now() - started, error: (err as Error).message });
+    log(false, { phase: 'end', ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
     throw err;
   }
 }
