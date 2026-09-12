@@ -367,7 +367,8 @@ CREATE TABLE run_log (
 
 Indexes: `items(status, vertical_id)`, `items(body_hash)`,
 `posts(status, vertical_id)`, `renditions(post_id, status)`,
-`publications(status, scheduled_for)`, `publications(channel_id, published_at)`.
+`publications(status, scheduled_for)`, `publications(channel_id, published_at)`,
+`run_log(stage, created_at)` (for `doctor` health checks that query by stage and time).
 
 The `UNIQUE(post_id, channel_id)` on `publications` is the single most important
 constraint in the schema: it makes double-posting the same content to the same
