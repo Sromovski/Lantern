@@ -172,6 +172,7 @@ lantern/
       types.ts          # Publisher interface
     schedule/           # queue selection, cadence, spacing
     review/             # local web UI for the review queue
+    doctor/             # health checks (lantern doctor)
     lib/                # http client w/ retry, cache, logging, config
   tests/
   logs/
