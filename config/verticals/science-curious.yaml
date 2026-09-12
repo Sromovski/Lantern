@@ -2,7 +2,7 @@ slug: science-curious
 name: Look Closer                    # working name — see spec §3 / §16
 kid_safe: true
 audience:
-  reading_level: grade-5
+  reading_level: grade-5      # enforced; check with a readability score
   age_range: [8, 13]
 voice: |
   Curious, plain, never condescending. Short sentences. One idea per post.
