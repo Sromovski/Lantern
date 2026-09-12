@@ -1,0 +1,17 @@
+slug: literature
+name: The Commonplace Book          # working name — see spec §3 / §16
+kid_safe: false
+audience: {}
+voice: |
+  Warm, precise, quietly enthusiastic — a well-read friend, not a lecturer.
+  Say who wrote it, what was happening in their life and the world when they
+  did, and what the line actually means. Every claim traces to a stored source.
+  Never: inspirational-poster tone, invented anecdotes, "timeless wisdom" filler.
+post_shape:
+  hook: 1 sentence
+  body: 2-4 short paragraphs
+  closer: 1 sentence pointing back to the work itself
+banned_topics: []
+image:
+  style: public-domain author portrait, title page, manuscript page, or period image of the setting
+  generated_disclosure: true

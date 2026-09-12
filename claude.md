@@ -496,6 +496,7 @@ Defined in `config/verticals/*.yaml`:
 ```yaml
 slug: science-curious
 name: Look Closer
+kid_safe: true
 audience:
   reading_level: grade-5      # enforced; check with a readability score
   age_range: [8, 13]
@@ -534,6 +535,9 @@ caption:
   title_max: 100
   text_max: 5000
 ```
+
+`auto_publish` lives only in the `channels` DB column (§6), never in channel YAML —
+that keeps the per-channel human review gate from being bypassable by a config edit.
 
 **Always disclose AI-generated images** in the caption ("Illustration:
 AI-generated"). Cheap to do, and the first time someone catches an undisclosed

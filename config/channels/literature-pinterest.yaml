@@ -1,0 +1,10 @@
+vertical: literature
+platform: pinterest
+account_ref: PINTEREST_BOARD_ID_COMMONPLACE
+formats: [pin]
+cadence:
+  posts_per_day: 1
+  times: ["20:00"]
+caption:
+  title_max: 100              # confirm against Pinterest API v5 docs at build time (Phase 6)
+  text_max: 800

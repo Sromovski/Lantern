@@ -1,0 +1,11 @@
+vertical: science-curious
+platform: youtube
+account_ref: YT_CHANNEL_ID_LOOK_CLOSER
+formats: [short]
+cadence:
+  posts_per_day: 1
+  times: ["16:30"]            # after school, local time
+made_for_kids: false          # family-friendly, not COPPA-designated — see §3
+caption:
+  title_max: 100
+  text_max: 5000

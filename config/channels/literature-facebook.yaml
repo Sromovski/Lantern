@@ -1,0 +1,9 @@
+vertical: literature
+platform: facebook
+account_ref: FB_PAGE_ID_COMMONPLACE
+formats: [square]
+cadence:
+  posts_per_day: 1
+  times: ["09:00"]            # local time; tune once real engagement data exists
+caption:
+  text_max: 2000              # editorial cap, well under Facebook's hard limit — confirm at build time
