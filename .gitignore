@@ -5,3 +5,4 @@ data/lantern.db
 data/lantern.db-*
 data/media/
 logs/
+data/cache/**/*.tmp
