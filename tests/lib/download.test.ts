@@ -262,4 +262,46 @@ describe('downloadWithRetry', () => {
     expect(err).toBeInstanceOf(DownloadStatusError);
     expect(err).toMatchObject({ status: 404, finalUrl: `${srv.base}/gone.jpg` });
   });
+
+  it('aborts with the hook error, without another attempt, when onRetry throws', async () => {
+    const srv = await serve((_req, res) => {
+      res.writeHead(503);
+      res.end();
+    });
+    const { sleep, calls } = recordingSleep();
+    let hookCalls = 0;
+    const err = await downloadWithRetry(`${srv.base}/x.jpg`, join(dir, 'x.jpg'), {
+      userAgent: UA,
+      sleep,
+      onRetry: () => {
+        hookCalls++;
+        throw new Error('logger down');
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('logger down');
+    expect(hookCalls).toBe(1);
+    expect(srv.requests()).toBe(1);
+    expect(calls).toEqual([]);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('reports a network failure through onRetry', async () => {
+    const srv = await serve((_req, res, n) => {
+      if (n === 1) {
+        res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': String(PAYLOAD.length) });
+        res.write(PAYLOAD.subarray(0, 1000));
+        setImmediate(() => res.socket?.destroy());
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'image/jpeg' });
+      res.end(PAYLOAD);
+    });
+    const events: RetryEvent[] = [];
+    const { sleep } = recordingSleep();
+    await downloadWithRetry(`${srv.base}/cut.jpg`, join(dir, 'cut.jpg'), { userAgent: UA, sleep, onRetry: (e) => events.push(e) });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ url: `${srv.base}/cut.jpg`, attempt: 1, delayMs: 500 });
+    expect(events[0]?.reason).not.toMatch(/^HTTP /);
+  });
 });

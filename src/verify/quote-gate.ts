@@ -69,12 +69,27 @@ export function decideQuote(quote: string, evidence: QuoteEvidence[]): QuoteDeci
     return reject('attribution-conflict', conflicts.map((e) => `also attributed to ${e.otherAuthor} (${e.citation})`).join('; '));
   }
 
-  const primaries = of('primary-text').filter(usableAs(1)).filter((e) => excerptMatches(quote, e));
-  const byAuthor = primaries.filter((e) => e.authorMatches);
-  const scholarly = of('scholarly').filter(usableAs(2));
-  const scholarlyByAuthor = scholarly.filter((e) => e.authorMatches);
+  // authorMatches must be a real boolean: evidence without one (for example untyped harvester output) is
+  // unusable, so the item ends as a reopenable insufficient-evidence rejection rather than a final one.
+  const hasAuthorVerdict = (e: { authorMatches: boolean }) => typeof e.authorMatches === 'boolean';
+  const primaries = of('primary-text')
+    .filter(usableAs(1))
+    .filter(hasAuthorVerdict)
+    .filter((e) => excerptMatches(quote, e));
+  const byAuthor = primaries.filter((e) => e.authorMatches === true);
+  const scholarly = of('scholarly').filter(usableAs(2)).filter(hasAuthorVerdict);
+  const scholarlyByAuthor = scholarly.filter((e) => e.authorMatches === true);
+  const scholarlyOtherAuthor = scholarly.filter((e) => e.authorMatches === false);
   const references = of('reference').filter(usableAs(3)).map((e) => toSource(3, e));
 
+  // Spec section 8: sources that conflict on the attribution are a hard reject, even when another
+  // source names the attributed author.
+  if ((byAuthor.length > 0 || scholarlyByAuthor.length > 0) && scholarlyOtherAuthor.length > 0) {
+    return reject(
+      'attribution-conflict',
+      `a scholarly source attributes the quote to a different author: ${scholarlyOtherAuthor.map((e) => e.citation).join('; ')}`,
+    );
+  }
   if (byAuthor.length > 0) {
     return {
       status: 'verified',

@@ -75,11 +75,24 @@ describe('decideQuote', () => {
     expect(decideQuote(QUOTE, [scholarlyOtherAuthor])).toMatchObject({ status: 'rejected', reason: 'author-mismatch' });
   });
 
-  it('does not attach a scholarly source for a different author to a verified quote', () => {
+  it('rejects as an attribution conflict when a tier 1 match and a scholarly source disagree on the author', () => {
     const d = decideQuote(QUOTE, [primary(), scholarlyOtherAuthor]);
-    expect(d.status).toBe('verified');
-    if (d.status !== 'verified') return;
-    expect(d.sources.map((s) => s.tier)).toEqual([1]);
+    expect(d).toMatchObject({ status: 'rejected', reason: 'attribution-conflict' });
+    if (d.status === 'rejected') expect(d.detail).toContain('Thomas Carlyle');
+  });
+
+  it('rejects as an attribution conflict when scholarly sources disagree on the author', () => {
+    expect(decideQuote(QUOTE, [scholarly, scholarlyOtherAuthor])).toMatchObject({
+      status: 'rejected',
+      reason: 'attribution-conflict',
+    });
+  });
+
+  it('treats evidence without a boolean authorMatches as unusable rather than as a final author rejection', () => {
+    const untypedScholarly = { kind: 'scholarly', citation: 'Untyped harvester output' } as unknown as QuoteEvidence;
+    const untypedPrimary = { ...primary(), authorMatches: undefined } as unknown as QuoteEvidence;
+    expect(decideQuote(QUOTE, [untypedScholarly])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
+    expect(decideQuote(QUOTE, [untypedPrimary])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
   });
 
   it('never verifies on reference sources alone', () => {

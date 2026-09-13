@@ -494,14 +494,15 @@ makes "why did nothing post on Tuesday" answerable after the fact.
 Quote aggregator sites (BrainyQuote, Goodreads quotes, AZQuotes and friends) are
 **banned as sources**. They are the primary vector for misattribution and they
 launder each other's errors. They may not appear in `sources` at all. This ban,
-and the rule that every verified item needs at least one tier 1 or tier 2 source,
-are enforced in TypeScript (`assertSourceAllowed` / `insertSource` /
+and the rule that every verified item needs at least one tier 1 or tier 2
+source, are enforced in TypeScript (`assertSourceAllowed` / `insertSource` /
 `verifyQuoteItem`, which are authoritative), backed by SQLite triggers in
 migrations 002-004 as a best-effort backstop for writes that bypass that code. A
-tier 1 source must also be the URL of its full text on Project Gutenberg, Standard
-Ebooks or Wikisource (`PRIMARY_TEXT_DOMAINS`, enforced in TypeScript only; archive
-and proxy copies do not count), and scholarly evidence verifies a quote only when it
-attributes the quote to the same author.
+tier 1 source must also be the URL of its full text on Project Gutenberg,
+Standard Ebooks or Wikisource (`PRIMARY_TEXT_DOMAINS`, enforced in TypeScript
+only; archive and proxy copies do not count), and scholarly evidence verifies a
+quote only when it attributes the quote to the same author. If any usable source
+names a different author, the quote is rejected as an attribution conflict.
 
 Additional hard rejects: quotes attributed to an author who died before the
 phrasing existed; any quote whose earliest traceable appearance is post-1990

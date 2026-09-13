@@ -2717,7 +2717,7 @@ below, not later.
 
 > **Status:** the **Apply takes evidence, not a decision**, **Binary downloads** and **Cache write robustness and key canonicalization** rows are done on branch `phase-2-prerequisites` (Tasks Q2-Q4). The retry half of **Unsafe-method retries and upload timeouts** is done (Task Q1); separate connect/idle timeouts for long uploads remain for Phase 8. The destination policy for downloads (originals under `data/media/source/`, never under `data/cache/`) belongs to the 2.5 caller, and canonical cache keys treat `+` and `%20` as the same, so 2.1, 2.2 and 2.5 each confirm that their source form-decodes its query.
 
-> **Status:** the **Tier 1/2 host allowlists** row is done for tier 1 hosts and for scholarly `authorMatches` on branch `phase-2-guardrails` (Tasks G1-G2); a curated scholarly host allowlist remains for 2.2. From **Unattended retry visibility**, the `onRetry` hook and the doctor `LANTERN_CONTACT` check are done (Tasks G3-G4); the run deadline and the retry log line remain for Phase 5. `paths.cache` and `paths.media` exist (Task G5), and `DownloadStatusError` reports `finalUrl` (Task G4).
+> **Status:** the **Tier 1/2 host allowlists** row is done for tier 1 hosts and for scholarly `authorMatches` on branch `phase-2-guardrails` (Tasks G1-G2); a curated scholarly host allowlist remains for 2.2. From **Unattended retry visibility**, the doctor `LANTERN_CONTACT` check (Task G3) and the `onRetry` hook (Task G4) are done; the run deadline and the retry log line remain for Phase 5. `paths.cache` and `paths.media` exist (Task G5), and `DownloadStatusError` reports `finalUrl` (Task G4).
 
 The whole-branch review of Part B found issues that are real but out of scope for
 the F1–F7 fix wave. They are not forgotten — they must land before the milestone
@@ -2770,10 +2770,12 @@ Every milestone below follows the same opening ritual:
 - **Candidate selection (proposed, confirm in the sub-plan):** Claude proposes quotable passages from a chapter. Every candidate must then pass `locateQuote` against that same text or it is discarded. The passage is Tier 1 by construction (spec §8: "prefer harvesting from the texts themselves"), and the model can only *choose*, never *author*, quote text.
 - Cross-check the Gutendex author against the subject's Wikidata ID to set `authorMatches`. Filter out anthologies and translations whose text isn't the author's.
 - Insert with `INSERT OR IGNORE` on `(vertical_id, body_hash)`.
+- Cite the full text that was actually fetched: check both the request url and `finalUrl` against `PRIMARY_TEXT_DOMAINS` and cite `finalUrl`. If a redirect lands off the list, emit no primary-text evidence (the item ends `insufficient-evidence` and can be reopened). Cite canonical Wikisource `/wiki/<Title>` or `index.php?title=...&action=raw` urls, and never the Gutendex API url.
 
 **2.2 Wikiquote misattribution check** — `src/verify/wikiquote.ts`
 - MediaWiki API: parse the author page's "Misattributed" and "Disputed" sections, normalize each entry, and emit `listed-misattributed` evidence on a match. This runs **even for primary-text harvests** because the spec says hard-reject anything that appears there.
 - Optional lead generator: sourced Wikiquote entries become `raw` items with `reference` evidence, and they still need Tier 1/2 to verify.
+- Set scholarly `authorMatches: false` only when a source names a different author; that rejects as `author-mismatch` or `attribution-conflict`, both final. When the author cannot be confirmed, emit no scholarly evidence. Validate harvested evidence with zod at the harvester boundary.
 
 **2.3 `lantern harvest` and `lantern verify` commands**
 - Both wrapped in `runStage`. Verify gathers evidence (2.1, 2.2), calls `verifyQuoteItem`, which runs `decideQuote` against the stored body inside the write transaction.

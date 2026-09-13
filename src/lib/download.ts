@@ -110,6 +110,9 @@ export async function downloadWithRetry(url: string, destPath: string, opts: Dow
 
   for (let attempt = 1; attempt <= o.maxAttempts; attempt++) {
     const signal = AbortSignal.timeout(o.timeoutMs);
+    // The hook and the wait run after the try/catch, so a throwing hook or a rejecting sleep aborts the
+    // download instead of being treated as a download error and retried (matching fetchWithRetry).
+    let wait: { delayMs: number; reason: string } | undefined;
     try {
       const res = await o.fetchImpl(url, { headers, signal });
       if (res.status < 200 || res.status >= 300) {
@@ -119,23 +122,23 @@ export async function downloadWithRetry(url: string, destPath: string, opts: Dow
         if (!isRetryableStatus(res.status) || attempt === o.maxAttempts || (header !== null && header > delays.maxDelayMs)) {
           throw new DownloadStatusError(url, res.status, attempt, res.url || url);
         }
-        const delayMs = retryDelayMs(attempt, retryAfter, { ...delays, nowMs: o.now() });
-        o.onRetry({ url, attempt, delayMs, reason: `HTTP ${res.status}` });
-        await o.sleep(delayMs);
-        continue;
+        wait = { delayMs: retryDelayMs(attempt, retryAfter, { ...delays, nowMs: o.now() }), reason: `HTTP ${res.status}` };
+      } else {
+        const { bytes, sha256 } = await writeBody(res, tmp, url, maxBytes, signal);
+        done = { res, bytes, sha256 };
+        break;
       }
-      const { bytes, sha256 } = await writeBody(res, tmp, url, maxBytes, signal);
-      done = { res, bytes, sha256 };
-      break;
     } catch (err) {
       rmSync(tmp, { force: true });
       if (err instanceof DownloadStatusError || err instanceof DownloadTooLargeError) throw err;
       lastError = err;
       if (attempt < o.maxAttempts) {
-        const delayMs = retryDelayMs(attempt, null, { ...delays, nowMs: o.now() });
-        o.onRetry({ url, attempt, delayMs, reason: errorReason(err) });
-        await o.sleep(delayMs);
+        wait = { delayMs: retryDelayMs(attempt, null, { ...delays, nowMs: o.now() }), reason: errorReason(err) };
       }
+    }
+    if (wait !== undefined) {
+      o.onRetry({ url, attempt, ...wait });
+      await o.sleep(wait.delayMs);
     }
   }
 
