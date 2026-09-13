@@ -19,7 +19,7 @@ describe('extractNumbers', () => {
   });
 
   it('preserves negative signs', () => {
-    expect(extractNumbers('dropped to -5 degrees, then −3')).toEqual(['-5', '-3']);
+    expect(extractNumbers('dropped to -5 degrees, then \u22123')).toEqual(['-5', '-3']);
   });
 
   it('does not extract range or label numbers', () => {
