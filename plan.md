@@ -2734,7 +2734,7 @@ Every milestone below follows the same opening ritual:
 
 ### C0 — HTTP client and response cache (start of Phase 2, before any harvester)
 
-> **Status:** done on branch `phase-2-foundations` (docs/plans/phase-2-foundations.md, Tasks F3–F4). Beyond the text below, the cache redacts credential-like query params and URL userinfo, drops `Set-Cookie`/`Authorization` headers, and stores only a hash of request bodies, because `data/cache/` is committed. The `--refresh` flag is a `refresh` option today and becomes a CLI flag with `lantern harvest`.
+> **Status:** done on branch `phase-2-foundations` (docs/plans/phase-2-foundations.md, Tasks F3–F4). Beyond the text below, because `data/cache/` is committed, the cache: redacts exact credential-named query params (case- and separator-insensitive; ambiguous names like `code` deliberately excluded), URL userinfo and fragments; stores only allowlisted response headers; refuses to cache a body that echoes a redacted credential; and stores only a hash of request bodies. The `--refresh` flag is a `refresh` option today and becomes a CLI flag with `lantern harvest`.
 
 - **Files:** `src/lib/http.ts`, `src/lib/cache.ts`, `tests/lib/http.test.ts`
 - **Scope:** `fetch` wrapper with exponential backoff on 5xx and 429, honouring `Retry-After`; **never** retries any other 4xx (spec §11). A descriptive `User-Agent` with a contact address (Wikimedia requires one). Read-through cache at `data/cache/<source>/<sha256(method+url+body)>.json` storing status, headers, and body, with a `--refresh` escape hatch.

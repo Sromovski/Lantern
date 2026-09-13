@@ -50,11 +50,14 @@ Per-task review found gaps in some of the reference code. Those gaps were fixed,
 - **F3 — body read inside the retry.** `res.text()` runs inside the same `try` as `fetch`. A truncated body is therefore retried, and if every attempt is truncated it is thrown as `HttpError` with the read error as `cause`.
 - **F3 — User-Agent.** Headers are built with `new Headers(req.headers)` followed by `.set('user-agent', …)`, so a caller header of any letter case cannot be merged with the contact User-Agent.
 - **F3 — `maxAttempts` guard.** `maxAttempts` must be an integer ≥ 1; otherwise a `RangeError` is thrown before any request.
-- **Test counts.** F3 has 28 tests, not 19, so the full-suite targets become 158 after F3 and 173 after F4 (not 149 and 164).
+- **F4 — exact-name redaction.** The reference substring regex matched `author` via `auth`, so `?author=Dickens` and `?author=Austen` shared one cache key and one author's response was served for the other. As built, credential parameters are matched by exact name after lowercasing and removing `-`/`_` (`key`, `apikey`, `token`, `accesstoken`, `sig`, `jwt`, `x-amz-*`/`x-goog-*` signatures, …). Ambiguous short names such as `code`, `sid` and `session` are deliberately not redacted, because that would recreate the collision.
+- **F4 — fragments, headers, echoes.** URL fragments are stripped. Response headers are stored from an allowlist (`content-type`, `content-language`, `etag`, `last-modified`, `link`, `date`). A fresh body that contains any redacted credential value of 8 or more characters is returned but not cached.
+- **Test counts.** F3 has 28 tests (not 19) and F4 has 20 (not 15), so the full-suite targets become 158 after F3 and 178 after F4 (not 149 and 164).
 
 Deferred and recorded in `plan.md` Part C prerequisites:
 - A request timeout / `AbortSignal`.
 - Validating caller headers outside the retry `try`. An invalid header name is currently retried and then reported as a network `HttpError`.
+- The cache echo guard inspects only the request URL. A credential sent in a POST body or request header would not be recognized if a response echoed it.
 
 ---
 
