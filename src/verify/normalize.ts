@@ -7,13 +7,37 @@ const FORMAT_CHAR = /\p{Cf}/u;
 export interface NormalizedText {
   source: string;
   text: string;
-  map: number[];
+  map: Uint32Array;
+}
+
+export type PreparedHaystack = NormalizedText;
+
+class OffsetMap {
+  private buf: Uint32Array;
+  length = 0;
+
+  constructor(capacity: number) {
+    this.buf = new Uint32Array(Math.max(16, capacity));
+  }
+
+  push(offset: number): void {
+    if (this.length === this.buf.length) {
+      const grown = new Uint32Array(this.buf.length * 2);
+      grown.set(this.buf);
+      this.buf = grown;
+    }
+    this.buf[this.length++] = offset;
+  }
+
+  finish(): Uint32Array {
+    return this.buf.slice(0, this.length);
+  }
 }
 
 export function normalizeWithMap(input: string): NormalizedText {
   const source = input.normalize('NFC');
   let text = '';
-  const map: number[] = [];
+  const map = new OffsetMap(source.length);
   let pendingSpace = false;
 
   for (let i = 0; i < source.length; ) {
@@ -35,7 +59,7 @@ export function normalizeWithMap(input: string): NormalizedText {
     }
     i += ch.length;
   }
-  return { source, text, map };
+  return { source, text, map: map.finish() };
 }
 
 export function normalizeText(input: string): string {
@@ -52,10 +76,13 @@ export interface Located {
   excerpt: string;
 }
 
-export function locateQuote(quote: string, fullText: string): Located | null {
+export function prepareHaystack(fullText: string): PreparedHaystack {
+  return normalizeWithMap(fullText);
+}
+
+export function locateQuoteIn(quote: string, hay: PreparedHaystack): Located | null {
   const needle = normalizeText(quote);
   if (needle.length === 0) return null;
-  const hay = normalizeWithMap(fullText);
 
   for (let from = 0; ; ) {
     const at = hay.text.indexOf(needle, from);
@@ -71,4 +98,8 @@ export function locateQuote(quote: string, fullText: string): Located | null {
     }
     from = at + 1;
   }
+}
+
+export function locateQuote(quote: string, fullText: string): Located | null {
+  return locateQuoteIn(quote, prepareHaystack(fullText));
 }

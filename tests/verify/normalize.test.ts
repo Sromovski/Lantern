@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bodyHash, locateQuote, normalizeText } from '../../src/verify/normalize.js';
+import { bodyHash, locateQuote, locateQuoteIn, normalizeText, prepareHaystack } from '../../src/verify/normalize.js';
 
 describe('normalizeText', () => {
   it('folds smart quotes and apostrophes', () => {
@@ -108,4 +108,40 @@ describe('normalization hardening', () => {
       excerpt: '\u{1D518}nicorn has a \ufb01ne horn',
     });
   });
+});
+
+describe('prepared haystack', () => {
+  const TEXT = 'It was the best of times,\r\nit was the worst of times, it was the age of wisdom';
+
+  it('locateQuoteIn on a prepared haystack matches locateQuote', () => {
+    const hay = prepareHaystack(TEXT);
+    for (const q of [
+      'it was the best of times, it was the worst of times',
+      'age of wisdom',
+      'call me ishmael',
+      'wisdom',
+    ]) {
+      expect(locateQuoteIn(q, hay)).toEqual(locateQuote(q, TEXT));
+    }
+  });
+
+  it('uses a compact typed offset map with one entry per normalized code unit', () => {
+    const hay = prepareHaystack(TEXT);
+    expect(hay.map).toBeInstanceOf(Uint32Array);
+    expect(hay.map.length).toBe(hay.text.length);
+  });
+
+  it('locates many quotes in a novel-sized text within budget', () => {
+    const para =
+      'It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness. ';
+    const text =
+      para.repeat(Math.ceil(2_000_000 / para.length)) + 'Call me Ishmael, said nobody in this book.';
+    const started = performance.now();
+    const hay = prepareHaystack(text);
+    for (let i = 0; i < 20; i++) {
+      expect(locateQuoteIn(`a line that is not present number ${i}`, hay)).toBeNull();
+    }
+    expect(locateQuoteIn('call me ishmael said nobody', hay)?.excerpt).toBe('Call me Ishmael, said nobody');
+    expect(performance.now() - started).toBeLessThan(5000);
+  }, 20_000);
 });
