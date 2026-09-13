@@ -113,16 +113,17 @@ describe('normalization hardening', () => {
 describe('prepared haystack', () => {
   const TEXT = 'It was the best of times,\r\nit was the worst of times, it was the age of wisdom';
 
-  it('locateQuoteIn on a prepared haystack matches locateQuote', () => {
+  it('locateQuoteIn reuses one prepared haystack across many queries with exact offsets', () => {
     const hay = prepareHaystack(TEXT);
-    for (const q of [
-      'it was the best of times, it was the worst of times',
-      'age of wisdom',
-      'call me ishmael',
-      'wisdom',
-    ]) {
-      expect(locateQuoteIn(q, hay)).toEqual(locateQuote(q, TEXT));
-    }
+    expect(locateQuoteIn('it was the best of times, it was the worst of times', hay)).toEqual({
+      start: 0,
+      end: 52,
+      excerpt: 'It was the best of times,\r\nit was the worst of times',
+    });
+    expect(locateQuoteIn('age of wisdom', hay)).toEqual({ start: 65, end: 78, excerpt: 'age of wisdom' });
+    expect(locateQuoteIn('call me ishmael', hay)).toBeNull();
+    expect(locateQuoteIn('wisdom', hay)).toEqual({ start: 72, end: 78, excerpt: 'wisdom' });
+    expect(locateQuoteIn('age of wisdom', hay)).toEqual(locateQuote('age of wisdom', TEXT));
   });
 
   it('uses a compact typed offset map with one entry per normalized code unit', () => {
