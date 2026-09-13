@@ -343,6 +343,75 @@ describe('fetchWithRetry', () => {
   });
 });
 
+describe('fetchWithRetry with a non-idempotent method', () => {
+  it('does not retry a POST after a network failure', async () => {
+    let attempts = 0;
+    const boom = new Error('socket hang up');
+    const fetchImpl = (async () => {
+      attempts++;
+      throw boom;
+    }) as unknown as typeof fetch;
+    const { sleep, calls } = recordingSleep();
+    const err = await fetchWithRetry(
+      { url: 'http://127.0.0.1:1/', method: 'POST', body: 'x=1' },
+      { userAgent: UA, sleep, fetchImpl },
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ attempts: 1, url: 'http://127.0.0.1:1/', cause: boom });
+    expect(attempts).toBe(1);
+    expect(calls).toEqual([]);
+  });
+
+  it('sends a timed-out POST exactly once', async () => {
+    let received = 0;
+    const server = createServer((req, res) => {
+      received++;
+      req.resume();
+      setTimeout(() => res.end('late'), 300);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const { sleep } = recordingSleep();
+    const err = await fetchWithRetry({ url, method: 'POST', body: 'x=1' }, { userAgent: UA, sleep, timeoutMs: 100 }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ attempts: 1 });
+    expect(received).toBe(1);
+  });
+
+  it('returns a POST 503 without retrying', async () => {
+    const srv = await scriptedServer([{ status: 503 }, { status: 200 }]);
+    const { sleep, calls } = recordingSleep();
+    const res = await fetchWithRetry({ url: srv.base, method: 'POST', body: 'x=1' }, { userAgent: UA, sleep });
+    expect(res.status).toBe(503);
+    expect(srv.seen).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
+  it('still retries a POST that was rate limited', async () => {
+    const srv = await scriptedServer([{ status: 429, headers: { 'retry-after': '1' } }, { status: 200 }]);
+    const { sleep, calls } = recordingSleep();
+    const res = await fetchWithRetry({ url: srv.base, method: 'POST', body: 'x=1' }, { userAgent: UA, sleep });
+    expect(res.status).toBe(200);
+    expect(srv.seen.map((s) => s.body)).toEqual(['x=1', 'x=1']);
+    expect(calls).toEqual([1000]);
+  });
+
+  it('retries a POST 503 when the caller opts in with retryUnsafe', async () => {
+    const srv = await scriptedServer([{ status: 503 }, { status: 200 }]);
+    const { sleep, calls } = recordingSleep();
+    const res = await fetchWithRetry(
+      { url: srv.base, method: 'POST', body: 'x=1' },
+      { userAgent: UA, sleep, retryUnsafe: true },
+    );
+    expect(res.status).toBe(200);
+    expect(srv.seen).toHaveLength(2);
+    expect(calls).toEqual([500]);
+  });
+});
+
 describe('retryDelayMs', () => {
   const opts = { baseDelayMs: 500, maxDelayMs: 30_000, nowMs: 0 };
 

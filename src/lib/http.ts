@@ -21,6 +21,13 @@ export interface HttpOptions {
   maxDelayMs?: number;
   /** Per-attempt timeout covering the request and the body read. Defaults to 60 000 ms. */
   timeoutMs?: number;
+  /**
+   * A POST is sent once: after a network error, timeout or 5xx it is not retried, because the server
+   * may already have acted on it (spec section 11: never double-post). A 429 is still retried, since a
+   * rate-limited request was not processed. Set true only when the server de-duplicates retries, for
+   * example with an idempotency key.
+   */
+  retryUnsafe?: boolean;
   sleep?: (ms: number) => Promise<void>;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -114,7 +121,18 @@ export function retryDelayMs(
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promise<HttpResult> {
+export interface ResolvedHttpOptions {
+  maxAttempts: number;
+  timeoutMs: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  sleep: (ms: number) => Promise<void>;
+  fetchImpl: typeof fetch;
+  now: () => number;
+}
+
+/** Validates and defaults the options shared by fetchWithRetry and downloadWithRetry. */
+export function resolveHttpOptions(opts: HttpOptions): ResolvedHttpOptions {
   const maxAttempts = opts.maxAttempts ?? DEFAULTS.maxAttempts;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
     throw new RangeError(`maxAttempts must be an integer >= 1, got ${maxAttempts}`);
@@ -126,26 +144,35 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new RangeError(`timeoutMs must be a positive finite number, got ${timeoutMs}`);
   }
-  const headers = new Headers(req.headers);
-  headers.set('user-agent', opts.userAgent);
-  const delays = {
+  return {
+    maxAttempts,
+    timeoutMs,
     baseDelayMs: opts.baseDelayMs ?? DEFAULTS.baseDelayMs,
     maxDelayMs: opts.maxDelayMs ?? DEFAULTS.maxDelayMs,
+    sleep: opts.sleep ?? realSleep,
+    fetchImpl: opts.fetchImpl ?? fetch,
+    now: opts.now ?? Date.now,
   };
-  const sleep = opts.sleep ?? realSleep;
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const now = opts.now ?? Date.now;
+}
+
+export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promise<HttpResult> {
+  const o = resolveHttpOptions(opts);
+  const method = req.method ?? 'GET';
+  const retryAll = method === 'GET' || opts.retryUnsafe === true;
+  const headers = new Headers(req.headers);
+  headers.set('user-agent', opts.userAgent);
+  const delays = { baseDelayMs: o.baseDelayMs, maxDelayMs: o.maxDelayMs };
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (let attempt = 1; attempt <= o.maxAttempts; attempt++) {
     let res: Response;
     let body: string;
     try {
-      res = await fetchImpl(req.url, {
-        method: req.method ?? 'GET',
+      res = await o.fetchImpl(req.url, {
+        method,
         headers,
         body: req.body,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(o.timeoutMs),
       });
       const reason = unsupportedBodyReason(res.headers.get('content-type'));
       if (reason !== null) {
@@ -155,8 +182,13 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
       body = await res.text();
     } catch (err) {
       if (err instanceof UnsupportedBodyError) throw err;
+      if (!retryAll) {
+        throw new HttpError(`${method} failed and was not retried because it may have been processed: ${req.url}`, req.url, attempt, {
+          cause: err,
+        });
+      }
       lastError = err;
-      if (attempt < maxAttempts) await sleep(retryDelayMs(attempt, null, { ...delays, nowMs: now() }));
+      if (attempt < o.maxAttempts) await o.sleep(retryDelayMs(attempt, null, { ...delays, nowMs: o.now() }));
       continue;
     }
     const result: HttpResult = {
@@ -166,13 +198,14 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
       headers: Object.fromEntries(res.headers.entries()),
       body,
     };
-    if (!isRetryableStatus(res.status) || attempt === maxAttempts) return result;
-    const header = retryAfterMs(res.headers.get('retry-after'), now());
+    if (!isRetryableStatus(res.status) || attempt === o.maxAttempts) return result;
+    if (!retryAll && res.status !== 429) return result;
+    const header = retryAfterMs(res.headers.get('retry-after'), o.now());
     if (header !== null && header > delays.maxDelayMs) return result;
-    await sleep(retryDelayMs(attempt, res.headers.get('retry-after'), { ...delays, nowMs: now() }));
+    await o.sleep(retryDelayMs(attempt, res.headers.get('retry-after'), { ...delays, nowMs: o.now() }));
   }
 
-  throw new HttpError(`network failure after ${maxAttempts} attempts: ${req.url}`, req.url, maxAttempts, {
+  throw new HttpError(`network failure after ${o.maxAttempts} attempts: ${req.url}`, req.url, o.maxAttempts, {
     cause: lastError,
   });
 }
