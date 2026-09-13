@@ -13,6 +13,8 @@ describe('resolvePaths', () => {
       db: join(defaultRoot, 'data', 'lantern.db'),
       logs: join(defaultRoot, 'logs'),
       migrations: join(defaultRoot, 'migrations'),
+      cache: join(defaultRoot, 'data', 'cache'),
+      media: join(defaultRoot, 'data', 'media'),
     });
   });
 
@@ -23,6 +25,14 @@ describe('resolvePaths', () => {
     const p = resolvePaths({ LANTERN_ROOT: root, LANTERN_DB: abs, LANTERN_LOGS: 'var/logs' }, defaultRoot);
     expect(p.db).toBe(abs);
     expect(p.logs).toBe(join(root, 'var', 'logs'));
+  });
+
+  it('resolves cache and media overrides the same way as the database and logs', () => {
+    const root = resolve('/srv/lantern');
+    const media = resolve('/mnt/media');
+    const p = resolvePaths({ LANTERN_ROOT: root, LANTERN_CACHE: 'fixtures', LANTERN_MEDIA: media }, resolve('/elsewhere'));
+    expect(p.cache).toBe(join(root, 'fixtures'));
+    expect(p.media).toBe(media);
   });
 });
 

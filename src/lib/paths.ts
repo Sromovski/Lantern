@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export interface Paths { root: string; db: string; logs: string; migrations: string }
+export interface Paths { root: string; db: string; logs: string; migrations: string; cache: string; media: string }
 
 export function findProjectRoot(start: string = fileURLToPath(import.meta.url)): string {
   let dir = dirname(resolve(start));
@@ -27,5 +27,7 @@ export function resolvePaths(
     db: under(env.LANTERN_DB ?? 'data/lantern.db'),
     logs: under(env.LANTERN_LOGS ?? 'logs'),
     migrations: resolve(root, 'migrations'),
+    cache: under(env.LANTERN_CACHE ?? 'data/cache'),
+    media: under(env.LANTERN_MEDIA ?? 'data/media'),
   };
 }
