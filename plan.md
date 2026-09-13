@@ -2693,6 +2693,8 @@ git commit -m "feat(verify): programmatic numeric claim check"
 
 > **Status:** the **I4** row (foreign-key-safe migration runner and the doctor guard-trigger check; a future rebuild of `items` or `sources` must still recreate the 002-004 triggers in the same migration), **Unknown-command logging** and **Migration drift** rows are done on branch `phase-2-prerequisites` (docs/plans/phase-2-prerequisites.md, Tasks Q5-Q7).
 
+> **Status:** the **Missing channel credentials** row is done, and so is the doctor half of **I6** (two enabled channels on one platform that resolve to the same account fail `channels.destinations`), on branch `phase-2-guardrails` (docs/plans/phase-2-guardrails.md, Task G3). The publish-time guard, a channel-rename command and the re-added-channel `auto_publish` decision remain for Phase 4.
+
 The whole-branch review of Part A found issues that are real but out of scope for
 that fix wave. They are not forgotten — they must land before the milestone named
 below, not later.
@@ -2714,6 +2716,8 @@ below, not later.
 > **Status:** the **Stricter numbers**, **Total gate and typed apply errors**, **Archive-wrapped aggregator URLs**, **Request timeout / `AbortSignal`**, **Fail fast on invalid caller headers** and **Final URL after redirects** rows are done on branch `phase-2-hardening` (docs/plans/phase-2-hardening.md, Tasks H1–H4). Two rows landed differently from their text: the total gate treats a policy-refused source as unusable evidence (the decision becomes insufficient-evidence) instead of rejecting with a source-policy reason, and archive-wrapped URLs are caught by a bounded host scan plus a decoded substring check that mirrors the migration 002 trigger.
 
 > **Status:** the **Apply takes evidence, not a decision**, **Binary downloads** and **Cache write robustness and key canonicalization** rows are done on branch `phase-2-prerequisites` (Tasks Q2-Q4). The retry half of **Unsafe-method retries and upload timeouts** is done (Task Q1); separate connect/idle timeouts for long uploads remain for Phase 8. The destination policy for downloads (originals under `data/media/source/`, never under `data/cache/`) belongs to the 2.5 caller, and canonical cache keys treat `+` and `%20` as the same, so 2.1, 2.2 and 2.5 each confirm that their source form-decodes its query.
+
+> **Status:** the **Tier 1/2 host allowlists** row is done for tier 1 hosts and for scholarly `authorMatches` on branch `phase-2-guardrails` (Tasks G1-G2); a curated scholarly host allowlist remains for 2.2. From **Unattended retry visibility**, the `onRetry` hook and the doctor `LANTERN_CONTACT` check are done (Tasks G3-G4); the run deadline and the retry log line remain for Phase 5. `paths.cache` and `paths.media` exist (Task G5), and `DownloadStatusError` reports `finalUrl` (Task G4).
 
 The whole-branch review of Part B found issues that are real but out of scope for
 the F1–F7 fix wave. They are not forgotten — they must land before the milestone
