@@ -85,17 +85,17 @@ describe('decideQuote', () => {
   });
 
   it('rejects a primary-text excerpt that does not match the quote', () => {
-    const wrongExcerpt: QuoteEvidence = { ...primary(), excerpt: 'Call me Ishmael.' };
+    const wrongExcerpt = { ...primary(), excerpt: 'Call me Ishmael.' };
     expect(decideQuote(QUOTE, [wrongExcerpt])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
   });
 
   it('rejects a primary-text excerpt that is empty', () => {
-    const emptyExcerpt: QuoteEvidence = { ...primary(), excerpt: '' };
+    const emptyExcerpt = { ...primary(), excerpt: '' };
     expect(decideQuote(QUOTE, [emptyExcerpt])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
   });
 
   it('still verifies when the primary-text excerpt differs only by typographic folding', () => {
-    const typographic: QuoteEvidence = {
+    const typographic = {
       ...primary(),
       excerpt: '\u201cIt was the best of times\u2014it was the WORST of times',
     };
