@@ -23,6 +23,7 @@ function lantern(args: string[], scratch: string, opts: LanternOpts = {}) {
     FB_PAGE_ID_COMMONPLACE: 'x',
     PINTEREST_BOARD_ID_COMMONPLACE: 'x',
     YT_CHANNEL_ID_LOOK_CLOSER: 'x',
+    LANTERN_CONTACT: 'test@example.invalid',
   };
 
   const root = 'root' in opts ? opts.root : ROOT;

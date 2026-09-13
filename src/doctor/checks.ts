@@ -32,17 +32,19 @@ function channelChecks(ctx: DoctorContext, channel: LoadedChannel, id: number): 
   const prefix = `channel.${channel.slug}`;
   const out: CheckResult[] = [];
 
-  out.push(
-    env[channel.account_ref]
-      ? result(`${prefix}.account_ref`, 'ok', `${channel.account_ref} is set`)
-      : result(`${prefix}.account_ref`, 'warn', `${channel.account_ref} is not set in the environment`),
-  );
-
   const row = db.prepare('SELECT enabled, auto_publish FROM channels WHERE id = ?').get(id) as {
     enabled: number;
     auto_publish: number;
   };
   const live = row.enabled === 1 && row.auto_publish === 1;
+
+  out.push(
+    env[channel.account_ref]?.trim()
+      ? result(`${prefix}.account_ref`, 'ok', `${channel.account_ref} is set`)
+      : live
+        ? result(`${prefix}.account_ref`, 'fail', `${channel.account_ref} is not set in the environment; a live channel cannot publish without it`)
+        : result(`${prefix}.account_ref`, 'warn', `${channel.account_ref} is not set in the environment`),
+  );
 
   const scheduled = db
     .prepare("SELECT COUNT(*) FROM publications WHERE channel_id = ? AND status = 'scheduled' AND scheduled_for >= ?")
@@ -137,7 +139,33 @@ export function runChecks(ctx: DoctorContext): CheckResult[] {
         : result('config.synced', 'fail', `not in database: ${missing.join(', ')} — run \`lantern migrate\``),
     );
     for (const [channel, id] of ids) out.push(...channelChecks(ctx, channel, id));
+
+    const byDestination = new Map<string, LoadedChannel[]>();
+    for (const channel of ids.keys()) {
+      const value = ctx.env[channel.account_ref]?.trim();
+      if (!value) continue;
+      const key = `${channel.platform}\n${value}`;
+      byDestination.set(key, [...(byDestination.get(key) ?? []), channel]);
+    }
+    const shared = [...byDestination.values()].filter((group) => group.length > 1);
+    out.push(
+      shared.length === 0
+        ? result('channels.destinations', 'ok', 'every enabled channel points at a distinct account')
+        : result(
+            'channels.destinations',
+            'fail',
+            shared
+              .map((group) => `${group[0]!.platform}: ${group.map((c) => `${c.slug} (${c.account_ref})`).join(', ')} resolve to the same account`)
+              .join('; '),
+          ),
+    );
   }
+
+  out.push(
+    ctx.env.LANTERN_CONTACT?.trim()
+      ? result('env.contact', 'ok', 'LANTERN_CONTACT is set')
+      : result('env.contact', 'warn', 'LANTERN_CONTACT is not set; source APIs such as Wikimedia need a contact in the User-Agent'),
+  );
 
   const free = (ctx.freeBytes ?? defaultFreeBytes)(ctx.root);
   const freeDetail = `${(free / 1024 ** 2).toFixed(0)} MiB free`;

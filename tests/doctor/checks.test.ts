@@ -16,6 +16,7 @@ const ENV = {
   FB_PAGE_ID_COMMONPLACE: '1',
   PINTEREST_BOARD_ID_COMMONPLACE: '2',
   YT_CHANNEL_ID_LOOK_CLOSER: '3',
+  LANTERN_CONTACT: 'test@example.invalid',
 };
 
 function healthyCtx(overrides: Partial<DoctorContext> = {}): DoctorContext {
@@ -105,6 +106,43 @@ describe('runChecks', () => {
     const ctx = healthyCtx();
     ctx.db.prepare('UPDATE schema_migrations SET checksum = NULL').run();
     expect(byName(ctx, 'db.drift')).toMatchObject({ status: 'warn' });
+  });
+
+  it('fails when a live channel has no account credential', () => {
+    const ctx = healthyCtx({ env: { ...ENV, FB_PAGE_ID_COMMONPLACE: '' } });
+    expect(byName(ctx, 'channel.literature-facebook.account_ref')).toMatchObject({ status: 'warn' });
+    ctx.db.prepare("UPDATE channels SET auto_publish = 1 WHERE platform = 'facebook'").run();
+    expect(byName(ctx, 'channel.literature-facebook.account_ref')).toMatchObject({ status: 'fail' });
+  });
+
+  it('fails when two channels on one platform resolve to the same account, naming variables but not values', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lantern-doctor-root-'));
+    cpSync(join(ROOT, 'config'), join(root, 'config'), { recursive: true });
+    writeFileSync(
+      join(root, 'config', 'channels', 'literature-facebook-mirror.yaml'),
+      'vertical: literature\nplatform: facebook\naccount_ref: FB_PAGE_ID_MIRROR\nformats: [square]\ncadence:\n  posts_per_day: 1\n  times: ["10:00"]\ncaption:\n  text_max: 2000\n',
+    );
+    const db = testDb();
+    syncConfig(db, loadConfig(root));
+    const base = healthyCtx({ db, root });
+
+    const same = byName({ ...base, env: { ...ENV, FB_PAGE_ID_COMMONPLACE: '9876543', FB_PAGE_ID_MIRROR: '9876543' } }, 'channels.destinations');
+    expect(same).toMatchObject({ status: 'fail' });
+    expect(same?.detail).toContain('literature-facebook-mirror');
+    expect(same?.detail).toContain('FB_PAGE_ID_MIRROR');
+    expect(same?.detail).not.toContain('9876543');
+
+    expect(byName({ ...base, env: { ...ENV, FB_PAGE_ID_MIRROR: '5555555' } }, 'channels.destinations')).toMatchObject({
+      status: 'ok',
+    });
+  });
+
+  it('warns when LANTERN_CONTACT is not set, and never prints the contact itself', () => {
+    const { LANTERN_CONTACT: _contact, ...withoutContact } = ENV;
+    expect(byName(healthyCtx({ env: withoutContact }), 'env.contact')).toMatchObject({ status: 'warn' });
+    const ok = byName(healthyCtx(), 'env.contact');
+    expect(ok).toMatchObject({ status: 'ok' });
+    expect(ok?.detail).not.toContain('test@example.invalid');
   });
 });
 
