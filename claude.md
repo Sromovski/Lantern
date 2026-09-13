@@ -179,7 +179,7 @@ lantern/
     schedule/           # queue selection, cadence, spacing
     review/             # local web UI for the review queue
     doctor/             # health checks (lantern doctor)
-    lib/                # logging, run_log stage wrapper, paths (http client + cache later)
+    lib/                # logging, run_log stage wrapper, paths, http client + response cache
   tests/
   logs/
 ```
