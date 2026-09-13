@@ -1,5 +1,5 @@
 import { normalizeText } from './normalize.js';
-import { hostOf, isBannedSource, type SourceInput, type SourceTier } from './source-policy.js';
+import { assertSourceAllowed, SourcePolicyError, type SourceInput, type SourceTier } from './source-policy.js';
 
 export const MIN_QUOTE_WORDS = 5;
 
@@ -31,14 +31,25 @@ const toSource = (tier: SourceTier, e: { citation: string; url?: string; excerpt
 });
 
 /**
- * Usability applies only to positive evidence (primary-text, scholarly,
- * reference): a banned or unparseable url makes it count for nothing.
- * Negative evidence (listed-misattributed, attribution-conflict) always
- * counts, whatever its url, because a hard-reject signal must not be
- * dodgeable by a relative or protocol-relative href -- exactly the shape
- * MediaWiki output produces.
+ * Positive evidence (primary-text, scholarly, reference) counts only if the source it would
+ * become passes the insert-time policy at its intended tier: a banned, archive-wrapped,
+ * reference-domain-at-tier-1/2, unparseable-url or blank-citation source counts for nothing.
+ * This makes decideQuote total: every verified decision it returns is insertable.
+ * Negative evidence (listed-misattributed, attribution-conflict) always counts, whatever its
+ * url, because a hard-reject signal must not be dodgeable by a relative or protocol-relative
+ * href -- exactly the shape MediaWiki output produces.
  */
-const usable = (e: QuoteEvidence) => e.url === undefined || (hostOf(e.url) !== null && !isBannedSource(e.url));
+const usableAs =
+  (tier: SourceTier) =>
+  (e: { citation: string; url?: string; excerpt?: string }): boolean => {
+    try {
+      assertSourceAllowed(toSource(tier, e));
+      return true;
+    } catch (err) {
+      if (err instanceof SourcePolicyError) return false;
+      throw err;
+    }
+  };
 
 const excerptMatches = (quote: string, e: Extract<QuoteEvidence, { kind: 'primary-text' }>) =>
   normalizeText(e.excerpt) === normalizeText(quote);
@@ -58,10 +69,10 @@ export function decideQuote(quote: string, evidence: QuoteEvidence[]): QuoteDeci
     return reject('attribution-conflict', conflicts.map((e) => `also attributed to ${e.otherAuthor} (${e.citation})`).join('; '));
   }
 
-  const primaries = of('primary-text').filter(usable).filter((e) => excerptMatches(quote, e));
+  const primaries = of('primary-text').filter(usableAs(1)).filter((e) => excerptMatches(quote, e));
   const byAuthor = primaries.filter((e) => e.authorMatches);
-  const scholarly = of('scholarly').filter(usable);
-  const references = of('reference').filter(usable).map((e) => toSource(3, e));
+  const scholarly = of('scholarly').filter(usableAs(2));
+  const references = of('reference').filter(usableAs(3)).map((e) => toSource(3, e));
 
   if (byAuthor.length > 0) {
     return {
