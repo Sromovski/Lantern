@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cachedFetch, cacheKey, redactUrl } from '../../src/lib/cache.js';
+import { CacheCorruptError, cachedFetch, cacheKey, redactUrl, secretEnvValues } from '../../src/lib/cache.js';
 import { fetchWithRetry, type HttpRequest, type HttpResult } from '../../src/lib/http.js';
 
 const NOW = () => new Date('2026-09-13T00:00:00.000Z');
@@ -21,6 +21,7 @@ afterEach(async () => {
     s.closeAllConnections();
     await new Promise<void>((resolve) => s.close(() => resolve()));
   }
+  rmSync(dir, { recursive: true, force: true });
 });
 
 /** Our own fetcher interface, not a platform API. The real-HTTP path is covered by the last test. */
@@ -97,7 +98,7 @@ describe('cachedFetch', () => {
     });
     await cachedFetch(
       { url: 'https://user:secret-pw@api.example.test/items?api_key=secret-abc&q=dickens&access_token=secret-zzz', method: 'POST', body: 'password=secret-hunter2' },
-      { cacheDir: dir, source: 'example', now: NOW },
+      { cacheDir: dir, source: 'example', now: NOW, allowNonGet: true },
       fetcher,
     );
     const [file] = readdirSync(join(dir, 'example'));
@@ -169,6 +170,104 @@ describe('cachedFetch', () => {
     expect(await cachedFetch({ url: `${base}/missing` }, opts, fetcher)).toMatchObject({ fromCache: true, status: 404 });
     expect(hits).toEqual({ '/books': 1, '/missing': 1 });
   });
+
+  it.each([304, 401, 403, 408])('never caches a %i', async (status) => {
+    const { calls, fetcher } = countingFetcher({ status });
+    const req = { url: 'https://example.test/denied' };
+    await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher);
+    await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher);
+    expect(calls).toHaveLength(2);
+    expect(existsSync(join(dir, 'example'))).toBe(false);
+  });
+
+  it('caches a 410 because the resource is permanently gone', async () => {
+    const { calls, fetcher } = countingFetcher({ status: 410, body: 'gone' });
+    const req = { url: 'https://example.test/gone' };
+    await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher);
+    expect(await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher)).toMatchObject({
+      status: 410,
+      fromCache: true,
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('honours a per-source cacheable veto', async () => {
+    const { calls, fetcher } = countingFetcher({ body: '{"error":{"code":"mediawiki-api-error"}}' });
+    const opts = {
+      cacheDir: dir,
+      source: 'wikiquote',
+      secretValues: [],
+      cacheable: (r: HttpResult) => !r.body.includes('mediawiki-api-error'),
+    };
+    await cachedFetch({ url: 'https://example.test/api' }, opts, fetcher);
+    await cachedFetch({ url: 'https://example.test/api' }, opts, fetcher);
+    expect(calls).toHaveLength(2);
+    expect(existsSync(join(dir, 'wikiquote'))).toBe(false);
+  });
+
+  it('refuses to store an allowlisted Link header that echoes a URL credential', async () => {
+    const { fetcher } = countingFetcher({
+      headers: { 'content-type': 'application/json', link: '<https://api.example.test/next?access_token=leak-link-token>; rel="next"' },
+    });
+    await cachedFetch(
+      { url: 'https://api.example.test/items?access_token=leak-link-token' },
+      { cacheDir: dir, source: 'example', secretValues: [] },
+      fetcher,
+    );
+    expect(existsSync(join(dir, 'example'))).toBe(false);
+  });
+
+  it.each([
+    ['percent-encoded', '{"next":"items?api_key=leak%2Fecho-value"}'],
+    ['JSON slash-escaped', '{"next":"items?api_key=leak\\/echo-value"}'],
+  ])('refuses to store a %s credential echo', async (_label, body) => {
+    const { fetcher } = countingFetcher({ body });
+    await cachedFetch(
+      { url: 'https://api.example.test/items?api_key=leak%2Fecho-value' },
+      { cacheDir: dir, source: 'example', secretValues: [] },
+      fetcher,
+    );
+    expect(existsSync(join(dir, 'example'))).toBe(false);
+  });
+
+  it('refuses to store a JSON-escaped echo of a secret that contains a quote', async () => {
+    const { fetcher } = countingFetcher({ body: '{"echo":"env-secret\\"quoted"}' });
+    await cachedFetch(
+      { url: 'https://example.test/plain' },
+      { cacheDir: dir, source: 'example', secretValues: ['env-secret"quoted'] },
+      fetcher,
+    );
+    expect(existsSync(join(dir, 'example'))).toBe(false);
+  });
+
+  it('refuses to store secret values from secret-named env vars', async () => {
+    const { fetcher } = countingFetcher({ body: '{"echo":"env-secret-value-123"}' });
+    const result = await cachedFetch(
+      { url: 'https://example.test/plain' },
+      { cacheDir: dir, source: 'example', secretValues: ['env-secret-value-123'] },
+      fetcher,
+    );
+    expect(result).toMatchObject({ status: 200, fromCache: false });
+    expect(existsSync(join(dir, 'example'))).toBe(false);
+  });
+
+  it('refuses non-GET requests unless allowNonGet is set', async () => {
+    const { fetcher } = countingFetcher();
+    await expect(
+      cachedFetch({ url: 'https://example.test/', method: 'POST', body: 'x=1' }, { cacheDir: dir, source: 'example' }, fetcher),
+    ).rejects.toThrow(/GET requests only/);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['shape-invalid', '{}'],
+  ])('throws CacheCorruptError for a %s entry', async (_label, content) => {
+    const req = { url: 'https://example.test/corrupt' };
+    mkdirSync(join(dir, 'example'), { recursive: true });
+    writeFileSync(join(dir, 'example', `${cacheKey(req)}.json`), content);
+    const { fetcher } = countingFetcher();
+    await expect(cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher)).rejects.toThrow(CacheCorruptError);
+  });
 });
 
 describe('cacheKey and redactUrl', () => {
@@ -211,5 +310,17 @@ describe('cacheKey and redactUrl', () => {
 
   it('strips URL fragments, which servers never receive', () => {
     expect(redactUrl('https://x.example.test/cb#access_token=leak-frag&state=1')).toBe('https://x.example.test/cb');
+  });
+
+  it('collects only secret-named env var values of 8+ characters', () => {
+    expect(
+      secretEnvValues({
+        ANTHROPIC_API_KEY: 'env-secret-value-123',
+        FB_PAGE_ID_COMMONPLACE: '1234567890',
+        SHORT_TOKEN: 'abc',
+        LANTERN_CONTACT: 'test@example.invalid',
+        UNSET_SECRET: undefined,
+      }),
+    ).toEqual(['env-secret-value-123']);
   });
 });

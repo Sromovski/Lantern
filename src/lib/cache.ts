@@ -8,6 +8,12 @@ export interface CacheOptions {
   source: string;
   refresh?: boolean;
   now?: () => Date;
+  /** Per-source veto, checked after the status allowlist. Return false to return the result without caching it. */
+  cacheable?: (result: HttpResult) => boolean;
+  /** cachedFetch caches GET only; set true to allow caching another method. */
+  allowNonGet?: boolean;
+  /** Secret values to keep out of fixtures. Defaults to secretEnvValues(process.env). */
+  secretValues?: readonly string[];
 }
 
 export interface CachedResult extends HttpResult {
@@ -38,6 +44,35 @@ const CREDENTIAL_PARAMS = new Set([
 const STORED_HEADERS = new Set(['content-type', 'content-language', 'etag', 'last-modified', 'link', 'date']);
 /** Shorter redacted values are too likely to appear in a body by coincidence. */
 const MIN_ECHO_LENGTH = 8;
+
+export class CacheCorruptError extends Error {
+  override name = 'CacheCorruptError';
+
+  constructor(
+    readonly path: string,
+    message: string,
+  ) {
+    super(`${message}: ${path}`);
+  }
+}
+
+const SECRET_ENV_NAME = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)$/i;
+
+/** Values of env vars whose names look like credentials (e.g. ANTHROPIC_API_KEY, *_TOKEN), 8+ chars. */
+export function secretEnvValues(env: Record<string, string | undefined>): string[] {
+  const values: string[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    const trimmed = value?.trim();
+    if (trimmed && trimmed.length >= MIN_ECHO_LENGTH && SECRET_ENV_NAME.test(name)) values.push(trimmed);
+  }
+  return values;
+}
+
+/** The raw value plus the encodings in which APIs commonly echo it back. */
+function encodedForms(secret: string): string[] {
+  const percent = encodeURIComponent(secret);
+  return [...new Set([secret, percent, percent.replace(/%20/g, '+'), JSON.stringify(secret).slice(1, -1), secret.replaceAll('/', '\\/')])];
+}
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
@@ -88,7 +123,29 @@ export function cacheKey(req: HttpRequest): string {
   return sha256(`${req.method ?? 'GET'}\n${redactUrl(req.url)}\n${req.body ?? ''}`);
 }
 
-const isCacheable = (status: number) => status < 500 && status !== 429;
+const isCacheableStatus = (status: number) => (status >= 200 && status < 300) || status === 404 || status === 410;
+
+function readEntry(path: string): StoredEntry {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    throw new CacheCorruptError(path, `unreadable cache entry (${(err as Error).message})`);
+  }
+  const e = parsed as Partial<StoredEntry> | null;
+  if (
+    e === null ||
+    typeof e !== 'object' ||
+    typeof e.status !== 'number' ||
+    typeof e.body !== 'string' ||
+    typeof e.fetchedAt !== 'string' ||
+    typeof e.headers !== 'object' ||
+    e.headers === null
+  ) {
+    throw new CacheCorruptError(path, 'cache entry is missing status, headers, body or fetchedAt');
+  }
+  return e as StoredEntry;
+}
 
 export async function cachedFetch(
   req: HttpRequest,
@@ -98,11 +155,14 @@ export async function cachedFetch(
   if (!SOURCE_NAME.test(cache.source)) {
     throw new Error(`invalid cache source name: ${JSON.stringify(cache.source)}`);
   }
+  if ((req.method ?? 'GET') !== 'GET' && !cache.allowNonGet) {
+    throw new Error('cachedFetch caches GET requests only; pass allowNonGet: true to cache another method');
+  }
   const dir = join(cache.cacheDir, cache.source);
   const path = join(dir, `${cacheKey(req)}.json`);
 
   if (!cache.refresh && existsSync(path)) {
-    const stored = JSON.parse(readFileSync(path, 'utf8')) as StoredEntry;
+    const stored = readEntry(path);
     return {
       url: req.url,
       status: stored.status,
@@ -116,8 +176,7 @@ export async function cachedFetch(
   const result = await fetcher(req);
   const fetchedAt = (cache.now ?? (() => new Date()))().toISOString();
 
-  const echoesCredential = redactWithSecrets(req.url).secrets.some((secret) => result.body.includes(secret));
-  if (isCacheable(result.status) && !echoesCredential) {
+  if (isCacheableStatus(result.status) && (cache.cacheable?.(result) ?? true)) {
     const entry: StoredEntry = {
       request: {
         method: req.method ?? 'GET',
@@ -132,10 +191,18 @@ export async function cachedFetch(
       body: result.body,
       fetchedAt,
     };
-    mkdirSync(dir, { recursive: true });
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(entry, null, 2)}\n`);
-    renameSync(tmp, path);
+    const serialized = `${JSON.stringify(entry, null, 2)}\n`;
+    // Scan the raw stored fields as well as the serialized text: JSON serialization double-escapes
+    // backslashes and quotes, so an echo such as `leak\/value` in a body is not a substring of `serialized`.
+    const haystack = [serialized, entry.request.url, entry.url, ...Object.values(entry.headers), entry.body].join('\n');
+    const secrets = [...redactWithSecrets(req.url).secrets, ...(cache.secretValues ?? secretEnvValues(process.env))];
+    const leaks = secrets.some((secret) => encodedForms(secret).some((form) => haystack.includes(form)));
+    if (!leaks) {
+      mkdirSync(dir, { recursive: true });
+      const tmp = `${path}.${process.pid}.tmp`;
+      writeFileSync(tmp, serialized);
+      renameSync(tmp, path);
+    }
   }
 
   return { ...result, fetchedAt, fromCache: false };
