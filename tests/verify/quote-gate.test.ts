@@ -147,6 +147,7 @@ describe('decideQuote', () => {
       { ...primary(), citation: '' },
       { ...primary(), url: 'https://web.archive.org/web/2019/https://www.brainyquote.com/x' },
       { ...scholarly, citation: '' },
+      { ...scholarly, url: 'https://www.gutenberg.org/ebooks/98?utm_source=goodreads.com' },
     ];
     let verified = 0;
     for (let mask = 0; mask < 1 << pool.length; mask++) {
@@ -155,8 +156,29 @@ describe('decideQuote', () => {
       if (d.status !== 'verified') continue;
       verified++;
       for (const source of d.sources) expect(() => assertSourceAllowed(source)).not.toThrow();
+
+      const db = testDb();
+      const { itemId } = seedItem(db, QUOTE);
+      expect(() => applyQuoteDecision(db, itemId, d)).not.toThrow();
     }
     expect(verified).toBeGreaterThan(0);
+  });
+
+  it('verifies on the primary source and drops a companion url that only the trigger used to refuse', () => {
+    const d = decideQuote(QUOTE, [primary(), { ...scholarly, url: 'https://www.gutenberg.org/ebooks/98?utm_source=goodreads.com' }]);
+    expect(d.status).toBe('verified');
+    if (d.status !== 'verified') return;
+    expect(d.sources.map((s) => s.tier)).toEqual([1]);
+
+    const db = testDb();
+    const { itemId } = seedItem(db, QUOTE);
+    expect(() => applyQuoteDecision(db, itemId, d)).not.toThrow();
+    expect(db.prepare('SELECT status FROM items WHERE id = ?').pluck().get(itemId)).toBe('verified');
+  });
+
+  it('rejects a quote whose only evidence is a scheme-less archived reference page claimed as scholarly', () => {
+    const d = decideQuote(QUOTE, [{ ...scholarly, url: 'https://web.archive.org/web/2020/en.wikiquote.org/wiki/Charles_Dickens' }]);
+    expect(d).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
   });
 });
 

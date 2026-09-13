@@ -283,6 +283,19 @@ describe('cachedFetch', () => {
     expect(readFileSync(join(dir, 'gutendex', file!), 'utf8')).not.toMatch(/leak-/);
   });
 
+  it('refuses to store an entry whose body echoes a credential that appears only in finalUrl', async () => {
+    const { calls, fetcher } = countingFetcher({
+      finalUrl: 'https://mirror.example.test/books/98?api_key=leak-final-only-key',
+      body: '{"echo":"leak-final-only-key"}',
+    });
+    const req = { url: 'https://gutendex.example.test/books/98' };
+    const opts = { cacheDir: dir, source: 'gutendex', now: NOW, secretValues: [] };
+
+    await cachedFetch(req, opts, fetcher);
+    await cachedFetch(req, opts, fetcher);
+    expect(calls).toHaveLength(2);
+  });
+
   it('reads an entry written before finalUrl existed', async () => {
     const req = { url: 'https://example.test/legacy' };
     mkdirSync(join(dir, 'example'), { recursive: true });

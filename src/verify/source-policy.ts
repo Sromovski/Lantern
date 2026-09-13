@@ -55,28 +55,37 @@ const MAX_EMBEDDED_CANDIDATES = 256;
 const AUTHORITY_WINDOW = 1024;
 const EMBEDDED_SCHEME = /^https?:[\\/]+/i;
 const AUTHORITY_END = /[\s"'<>]/;
+const URL_IGNORED = /[\t\n\r]/g;
 
 export interface HostScan {
   hosts: string[];
   truncated: boolean;
 }
 
+/** The URL percent-decoded up to three times, with the tab/LF/CR characters URL parsers ignore removed. */
+function decodedText(url: string): string {
+  let text = url.slice(0, MAX_SOURCE_URL_LENGTH);
+  for (let i = 0; i < 3; i++) text = safeDecode(text);
+  return text.replace(URL_IGNORED, '');
+}
+
 /**
  * Every http(s) host a URL refers to: its own host plus the host of any URL embedded in it
- * (archive or proxy targets). The text is percent-decoded up to three times, then scanned for
- * embedded schemes written with any run of slashes or backslashes (https://, https:/, https:\\,
- * https:\\/\\/) and for protocol-relative "//host" not already part of a scheme. Each candidate is
- * parsed from at most AUTHORITY_WINDOW characters. A URL longer than MAX_SOURCE_URL_LENGTH, or one
- * with more than MAX_EMBEDDED_CANDIDATES embedded candidates, is marked truncated: callers treat
- * that as a refusal (fail closed), which also keeps the scan's cost linear.
+ * (archive or proxy targets). The text is percent-decoded up to three times, with tab/LF/CR
+ * removed, then scanned for embedded schemes written with any run of slashes or backslashes
+ * (https://, https:/, https:\\, https:\\/\\/) and for protocol-relative "//host" not already part
+ * of a scheme. Each candidate is parsed from at most AUTHORITY_WINDOW characters. A URL longer than
+ * MAX_SOURCE_URL_LENGTH, or one with more than MAX_EMBEDDED_CANDIDATES embedded candidates, is
+ * marked truncated: callers treat that as a refusal (fail closed), which also keeps the scan's cost
+ * linear. Scheme-less embedded targets are not hosts to this scan; `mentionedDomain` covers them
+ * for the banned and reference lists.
  */
 export function scanHosts(url: string): HostScan {
   const hosts = new Set<string>();
   const outer = hostOf(url);
   if (outer !== null) hosts.add(outer);
   let truncated = url.length > MAX_SOURCE_URL_LENGTH;
-  let text = url.slice(0, MAX_SOURCE_URL_LENGTH);
-  for (let i = 0; i < 3; i++) text = safeDecode(text);
+  const text = decodedText(url);
   const lower = text.toLowerCase();
   let candidates = 0;
   const consider = (candidate: string) => {
@@ -121,9 +130,25 @@ export function hostsIn(url: string): string[] {
   return scanHosts(url).hosts;
 }
 
+/**
+ * The first domain in `domains` that appears anywhere in the URL, raw or decoded (lowercased, with
+ * tab/LF/CR removed). This mirrors the migration 002 trigger (`lower(url) LIKE '%domain%'`), so
+ * every URL this module accepts is also insertable, and it catches scheme-less wrapped targets such
+ * as `web.archive.org/web/2020/en.wikiquote.org/...` that the host scan cannot see. It can refuse
+ * a URL that merely mentions a domain in a query or path; that refusal is deliberate (fail closed).
+ */
+function mentionedDomain(url: string, domains: readonly string[]): string | undefined {
+  const texts = [url.replace(URL_IGNORED, '').toLowerCase(), decodedText(url).toLowerCase()];
+  return domains.find((domain) => texts.some((text) => text.includes(domain)));
+}
+
 export function isBannedSource(url: string): boolean {
   const { hosts, truncated } = scanHosts(url);
-  return truncated || hosts.some((host) => BANNED_SOURCE_DOMAINS.some((d) => onDomain(host, d)));
+  return (
+    truncated ||
+    hosts.some((host) => BANNED_SOURCE_DOMAINS.some((d) => onDomain(host, d))) ||
+    mentionedDomain(url, BANNED_SOURCE_DOMAINS) !== undefined
+  );
 }
 
 export function assertSourceAllowed(src: SourceInput): void {
@@ -138,10 +163,10 @@ export function assertSourceAllowed(src: SourceInput): void {
   }
   const { hosts, truncated } = scanHosts(src.url);
   if (truncated) throw new SourcePolicyError('source url embeds too many urls to check');
-  const banned = hosts.find((h) => BANNED_SOURCE_DOMAINS.some((d) => onDomain(h, d)));
+  const banned = hosts.find((h) => BANNED_SOURCE_DOMAINS.some((d) => onDomain(h, d))) ?? mentionedDomain(src.url, BANNED_SOURCE_DOMAINS);
   if (banned !== undefined) throw new SourcePolicyError(`banned source domain: ${banned}`);
   if (src.tier < 3) {
-    const reference = hosts.find((h) => REFERENCE_DOMAINS.some((d) => onDomain(h, d)));
+    const reference = hosts.find((h) => REFERENCE_DOMAINS.some((d) => onDomain(h, d))) ?? mentionedDomain(src.url, REFERENCE_DOMAINS);
     if (reference !== undefined) {
       throw new SourcePolicyError(`${reference} is a reference source and cannot be tier ${src.tier}`);
     }

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { assertSourceAllowed, hostOf, hostsIn, isBannedSource, scanHosts, SourcePolicyError } from '../../src/verify/source-policy.js';
+import { insertSource } from '../../src/db/sources.js';
+import { seedItem, testDb } from '../helpers/db.js';
 
 describe('hostOf', () => {
   it('returns a lowercase host for http(s) and null otherwise', () => {
@@ -50,10 +52,10 @@ describe('isBannedSource', () => {
     'https://goodreads.com/quotes/12345',
     'HTTPS://AZQUOTES.COM/quote/1',
     'https://m.quotefancy.com/x',
+    'https://notgoodreads.com/page',
   ])('bans %s', (url) => expect(isBannedSource(url)).toBe(true));
 
   it.each([
-    'https://notgoodreads.com/page',
     'https://www.gutenberg.org/ebooks/98',
     'https://en.wikisource.org/wiki/A_Tale_of_Two_Cities',
     'https://standardebooks.org/ebooks/charles-dickens/bleak-house',
@@ -61,6 +63,11 @@ describe('isBannedSource', () => {
 
   it('bans a trailing-dot FQDN of a banned domain', () => {
     expect(isBannedSource('https://www.brainyquote.com./x')).toBe(true);
+  });
+
+  it('detects a banned host split by an encoded or literal tab', () => {
+    expect(isBannedSource('https://web.archive.org/web/2019/https://www.brainy%09quote.com/x')).toBe(true);
+    expect(isBannedSource('https://web.archive.org/web/2019/https://www.brainy\tquote.com/x')).toBe(true);
   });
 
   it.each([
@@ -136,6 +143,34 @@ describe('assertSourceAllowed', () => {
     ).toThrow(/reference source/);
   });
 
+  it.each([
+    'https://web.archive.org/web/2020/en.wikiquote.org/wiki/Charles_Dickens',
+    'https://webcache.googleusercontent.com/search?q=cache:en.wikipedia.org/wiki/Charles_Dickens',
+    'https://archive.ph/en.wikiquote.org/wiki/Charles_Dickens',
+  ])('refuses the scheme-less wrapped reference page %s at tier 2', (url) => {
+    expect(() => assertSourceAllowed({ tier: 2, url, citation: 'c' })).toThrow(/reference source/);
+  });
+
+  it('allows a scheme-less wrapped reference page at tier 3', () => {
+    expect(() =>
+      assertSourceAllowed({ tier: 3, url: 'https://web.archive.org/web/2020/en.wikiquote.org/wiki/Charles_Dickens', citation: 'c' }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    'https://www.gutenberg.org/ebooks/98?utm_source=goodreads.com',
+    'https://en.wikiquote.org/wiki/Talk:Quotes.net',
+    'https://webcache.googleusercontent.com/search?q=cache:www.brainyquote.com/quotes/x',
+    'https://example.edu/p?ref=AZQUOTES.COM',
+    'https://example.edu/notgoodreads.com/page',
+  ])('refuses at every tier a url the banned-domain trigger refuses: %s', (url) => {
+    expect(isBannedSource(url)).toBe(true);
+    for (const tier of [1, 2, 3] as const) {
+      expect(() => assertSourceAllowed({ tier, url, citation: 'c' })).toThrow(SourcePolicyError);
+      expect(() => assertSourceAllowed({ tier, url, citation: 'c' })).toThrow(/banned source domain/);
+    }
+  });
+
   it('refuses a source url longer than the length cap', () => {
     expect(() => assertSourceAllowed({ ...ok, url: `https://x.example.test/?${'q'.repeat(20_000)}` })).toThrow(/longer than/);
   });
@@ -143,5 +178,47 @@ describe('assertSourceAllowed', () => {
   it('rejects empty citations and unparseable urls', () => {
     expect(() => assertSourceAllowed({ ...ok, citation: '   ' })).toThrow(/citation/);
     expect(() => assertSourceAllowed({ ...ok, url: 'ftp://example.com' })).toThrow(/url/);
+  });
+
+  it('every url assertSourceAllowed accepts is accepted by the insert triggers', () => {
+    const db = testDb();
+    const { itemId } = seedItem(db);
+    const triggerUrls = [
+      'https://www.gutenberg.org/ebooks/98?utm_source=goodreads.com',
+      'https://en.wikiquote.org/wiki/Talk:Quotes.net',
+      'https://webcache.googleusercontent.com/search?q=cache:www.brainyquote.com/quotes/x',
+      'https://example.edu/p?ref=AZQUOTES.COM',
+      'https://example.edu/notgoodreads.com/page',
+    ];
+    const schemeLessUrls = [
+      'https://web.archive.org/web/2020/en.wikiquote.org/wiki/Charles_Dickens',
+      'https://webcache.googleusercontent.com/search?q=cache:en.wikipedia.org/wiki/Charles_Dickens',
+      'https://archive.ph/en.wikiquote.org/wiki/Charles_Dickens',
+    ];
+    const cleanUrls = [
+      'https://www.gutenberg.org/ebooks/98',
+      'https://en.wikisource.org/w/index.php?title=Page:Bleak_House.djvu/15',
+      'https://web.archive.org/web/2019id_/https://www.gutenberg.org/files/98/98-h/98-h.htm',
+      'https://login.ezproxy.example.edu/login?url=https://www.jstor.org/stable/123',
+    ];
+
+    for (const url of [...triggerUrls, ...schemeLessUrls, ...cleanUrls]) {
+      let refused = false;
+      try {
+        assertSourceAllowed({ tier: 3, url, citation: 'c' });
+      } catch (err) {
+        refused = true;
+        expect(err).toBeInstanceOf(SourcePolicyError);
+      }
+      if (refused) {
+        expect(() => insertSource(db, itemId, { tier: 3, url, citation: 'c' })).toThrow(SourcePolicyError);
+      } else {
+        expect(() => insertSource(db, itemId, { tier: 3, url, citation: 'c' })).not.toThrow();
+      }
+    }
+
+    for (const url of cleanUrls) {
+      expect(() => insertSource(db, itemId, { tier: 1, url, citation: 'c' })).not.toThrow();
+    }
   });
 });

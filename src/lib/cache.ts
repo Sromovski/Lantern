@@ -199,7 +199,11 @@ export async function cachedFetch(
     // Scan the raw stored fields as well as the serialized text: JSON serialization double-escapes
     // backslashes and quotes, so an echo such as `leak\/value` in a body is not a substring of `serialized`.
     const haystack = [serialized, entry.request.url, entry.url, entry.finalUrl ?? '', ...Object.values(entry.headers), entry.body].join('\n');
-    const secrets = [...redactWithSecrets(req.url).secrets, ...(cache.secretValues ?? secretEnvValues(process.env))];
+    const secrets = [
+      ...redactWithSecrets(req.url).secrets,
+      ...(result.finalUrl !== undefined ? redactWithSecrets(result.finalUrl).secrets : []),
+      ...(cache.secretValues ?? secretEnvValues(process.env)),
+    ];
     const leaks = secrets.some((secret) => encodedForms(secret).some((form) => haystack.includes(form)));
     if (!leaks) {
       mkdirSync(dir, { recursive: true });

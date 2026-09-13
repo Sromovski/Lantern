@@ -409,6 +409,9 @@ whitespace normalized, smart quotes folded) so the same line never enters twice.
 Runs the attribution gates (§8). Promotes to `verified` with `sources` rows, or
 marks `rejected` with a reason. Rejections are kept, not deleted — they are the
 dedupe memory that stops us re-harvesting the same bad quote monthly.
+The one exception is a quote rejected only for insufficient evidence: it may be
+reopened to `raw` and verified again once better evidence exists. Every other
+rejection is final.
 
 **`lantern enrich --vertical literature --limit 5`**
 Claude call. Given the item, its subject, and its stored sources, write the
