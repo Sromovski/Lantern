@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { HttpRequest, HttpResult } from './http.js';
 
@@ -14,6 +14,10 @@ export interface CacheOptions {
   allowNonGet?: boolean;
   /** Secret values to keep out of fixtures. Defaults to secretEnvValues(process.env). */
   secretValues?: readonly string[];
+  /** Test hook: publishes a written entry. Defaults to fs.renameSync. */
+  rename?: (from: string, to: string) => void;
+  /** Test hook: waits between rename attempts. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface CachedResult extends HttpResult {
@@ -120,8 +124,26 @@ export function redactUrl(url: string): string {
   return redactWithSecrets(url).url;
 }
 
+/**
+ * Query parameters sorted by name and re-encoded one way, so equivalent requests share one key:
+ * `?b=2&a=1` and `?a=1&b=2`, `%20` and `+`. Repeated names keep their relative order, and a literal
+ * plus (`%2B`) stays distinct from a space. An unparseable URL is used as-is.
+ */
+function canonicalUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const entries = [...parsed.searchParams.entries()];
+  entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  parsed.search = new URLSearchParams(entries).toString();
+  return parsed.toString();
+}
+
 export function cacheKey(req: HttpRequest): string {
-  return sha256(`${req.method ?? 'GET'}\n${redactUrl(req.url)}\n${req.body ?? ''}`);
+  return sha256(`${req.method ?? 'GET'}\n${canonicalUrl(redactUrl(req.url))}\n${req.body ?? ''}`);
 }
 
 const isCacheableStatus = (status: number) => (status >= 200 && status < 300) || status === 404 || status === 410;
@@ -147,6 +169,28 @@ function readEntry(path: string): StoredEntry {
     throw new CacheCorruptError(path, 'cache entry is missing status, headers, body or fetchedAt');
   }
   return e as StoredEntry;
+}
+
+/** Windows reports these while another process (an editor, a virus scanner, a parallel run) holds the file. */
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RENAME_ATTEMPTS = 5;
+
+async function publishEntry(tmp: string, path: string, cache: CacheOptions): Promise<void> {
+  const rename = cache.rename ?? renameSync;
+  const sleep = cache.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rename(tmp, path);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === undefined || !RENAME_RETRY_CODES.has(code) || attempt === RENAME_ATTEMPTS) {
+        rmSync(tmp, { force: true });
+        throw err;
+      }
+      await sleep(50 * 2 ** (attempt - 1));
+    }
+  }
 }
 
 export async function cachedFetch(
@@ -209,7 +253,7 @@ export async function cachedFetch(
       mkdirSync(dir, { recursive: true });
       const tmp = `${path}.${process.pid}.tmp`;
       writeFileSync(tmp, serialized);
-      renameSync(tmp, path);
+      await publishEntry(tmp, path, cache);
     }
   }
 

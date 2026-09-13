@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -309,6 +309,75 @@ describe('cachedFetch', () => {
     expect(hit.finalUrl).toBeUndefined();
     expect(calls).toHaveLength(0);
   });
+
+  it('retries a rename refused with EPERM and then serves the entry', async () => {
+    const { calls, fetcher } = countingFetcher();
+    const req = { url: 'https://example.test/locked' };
+    let refusals = 0;
+    const waits: number[] = [];
+    const opts = {
+      cacheDir: dir,
+      source: 'example',
+      now: NOW,
+      secretValues: [],
+      rename: (from: string, to: string) => {
+        if (refusals < 2) {
+          refusals++;
+          throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+        }
+        renameSync(from, to);
+      },
+      sleep: async (ms: number) => {
+        waits.push(ms);
+      },
+    };
+    await cachedFetch(req, opts, fetcher);
+    expect(waits).toEqual([50, 100]);
+    expect(await cachedFetch(req, opts, fetcher)).toMatchObject({ fromCache: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('gives up after five refused renames, removes the temp file and throws', async () => {
+    const { fetcher } = countingFetcher();
+    const waits: number[] = [];
+    let attempts = 0;
+    const opts = {
+      cacheDir: dir,
+      source: 'example',
+      now: NOW,
+      secretValues: [],
+      rename: () => {
+        attempts++;
+        throw Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+      },
+      sleep: async (ms: number) => {
+        waits.push(ms);
+      },
+    };
+    await expect(cachedFetch({ url: 'https://example.test/busy' }, opts, fetcher)).rejects.toThrow(/resource busy/);
+    expect(attempts).toBe(5);
+    expect(waits).toEqual([50, 100, 200, 400]);
+    expect(readdirSync(join(dir, 'example'))).toEqual([]);
+  });
+
+  it('does not retry a rename that fails for another reason', async () => {
+    const { fetcher } = countingFetcher();
+    let attempts = 0;
+    const opts = {
+      cacheDir: dir,
+      source: 'example',
+      now: NOW,
+      secretValues: [],
+      rename: () => {
+        attempts++;
+        throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+      },
+      sleep: async () => {},
+    };
+    await expect(cachedFetch({ url: 'https://example.test/full' }, opts, fetcher)).rejects.toThrow(/no space left/);
+    expect(attempts).toBe(1);
+    expect(readdirSync(join(dir, 'example'))).toEqual([]);
+  });
 });
 
 describe('cacheKey and redactUrl', () => {
@@ -363,5 +432,18 @@ describe('cacheKey and redactUrl', () => {
         UNSET_SECRET: undefined,
       }),
     ).toEqual(['env-secret-value-123']);
+  });
+
+  it('shares one key across query parameter order and space encodings', () => {
+    expect(cacheKey({ url: 'https://gutendex.com/books/?search=charles%20dickens&languages=en' })).toBe(
+      cacheKey({ url: 'https://gutendex.com/books/?languages=en&search=charles+dickens' }),
+    );
+  });
+
+  it('keeps distinct keys when repeated parameters are reordered or a plus is literal', () => {
+    expect(cacheKey({ url: 'https://x.example.test/?tag=a&tag=b' })).not.toBe(
+      cacheKey({ url: 'https://x.example.test/?tag=b&tag=a' }),
+    );
+    expect(cacheKey({ url: 'https://x.example.test/?q=a%2Bb' })).not.toBe(cacheKey({ url: 'https://x.example.test/?q=a+b' }));
   });
 });
