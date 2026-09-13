@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assertSourceAllowed, hostOf, isBannedSource, SourcePolicyError } from '../../src/verify/source-policy.js';
+import { assertSourceAllowed, hostOf, hostsIn, isBannedSource, SourcePolicyError } from '../../src/verify/source-policy.js';
 
 describe('hostOf', () => {
   it('returns a lowercase host for http(s) and null otherwise', () => {
@@ -10,6 +10,25 @@ describe('hostOf', () => {
 
   it('strips a trailing dot from the FQDN', () => {
     expect(hostOf('https://www.gutenberg.org./ebooks/98')).toBe('www.gutenberg.org');
+  });
+});
+
+describe('hostsIn', () => {
+  it('returns the outer host and every embedded archive or proxy target', () => {
+    expect(hostsIn('https://web.archive.org/web/2019/https://www.brainyquote.com/quotes/x')).toEqual([
+      'web.archive.org',
+      'www.brainyquote.com',
+    ]);
+  });
+
+  it('decodes percent-encoded targets up to twice', () => {
+    expect(hostsIn('https://proxy.example.test/?u=https%253A%252F%252Fwww.brainyquote.com%252Fq')).toContain(
+      'www.brainyquote.com',
+    );
+  });
+
+  it('does not throw on malformed percent-encoding', () => {
+    expect(() => hostsIn('https://x.example.test/?u=%E0%A4%A')).not.toThrow();
   });
 });
 
@@ -31,6 +50,17 @@ describe('isBannedSource', () => {
   it('bans a trailing-dot FQDN of a banned domain', () => {
     expect(isBannedSource('https://www.brainyquote.com./x')).toBe(true);
   });
+
+  it.each([
+    'https://web.archive.org/web/2019/https://www.brainyquote.com/quotes/x',
+    'https://web.archive.org/web/2019id_/http://goodreads.com/quotes/1',
+    'https://translate.example.test/translate?u=https%3A%2F%2Fwww.azquotes.com%2Fquote%2F1',
+    'https://web.archive.org/web/2019/HTTPS://WWW.BRAINYQUOTE.COM/x',
+  ])('bans the wrapped aggregator %s', (url) => expect(isBannedSource(url)).toBe(true));
+
+  it('allows an archived public-domain text', () => {
+    expect(isBannedSource('https://web.archive.org/web/2019/https://www.gutenberg.org/ebooks/98')).toBe(false);
+  });
 });
 
 describe('assertSourceAllowed', () => {
@@ -48,6 +78,12 @@ describe('assertSourceAllowed', () => {
   it('refuses to let a reference site claim tier 1 or 2', () => {
     expect(() => assertSourceAllowed({ ...ok, url: 'https://en.wikiquote.org/wiki/Charles_Dickens' })).toThrow(/reference source/);
     expect(() => assertSourceAllowed({ ...ok, tier: 3, url: 'https://en.wikiquote.org/wiki/Charles_Dickens' })).not.toThrow();
+  });
+
+  it('refuses to let an archived reference page claim tier 1 or 2', () => {
+    const archived = 'https://web.archive.org/web/2020/https://en.wikiquote.org/wiki/Charles_Dickens';
+    expect(() => assertSourceAllowed({ ...ok, url: archived })).toThrow(/reference source/);
+    expect(() => assertSourceAllowed({ ...ok, tier: 3, url: archived })).not.toThrow();
   });
 
   it('rejects empty citations and unparseable urls', () => {
