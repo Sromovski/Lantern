@@ -1,7 +1,7 @@
 import { statfsSync } from 'node:fs';
 import { ConfigError, loadConfig, type LanternConfig, type LoadedChannel } from '../config/load.js';
 import type { Db } from '../db/connection.js';
-import { pendingMigrations } from '../db/migrate.js';
+import { expectedTriggers, pendingMigrations } from '../db/migrate.js';
 import { findChannelId } from '../db/sync.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
@@ -86,6 +86,16 @@ export function runChecks(ctx: DoctorContext): CheckResult[] {
     );
   } catch (err) {
     out.push(result('db.migrations', 'fail', err instanceof Error ? err.message : String(err)));
+  }
+
+  if (pending !== undefined && pending.length === 0) {
+    const present = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").pluck().all() as string[]);
+    const missing = expectedTriggers(db, ctx.migrationsDir).filter((name) => !present.has(name));
+    out.push(
+      missing.length === 0
+        ? result('db.triggers', 'ok', `${present.size} triggers present`)
+        : result('db.triggers', 'fail', `missing guard triggers: ${missing.join(', ')}; the schema was changed outside lantern migrate`),
+    );
   }
 
   let config: LanternConfig | undefined;

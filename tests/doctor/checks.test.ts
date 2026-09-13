@@ -82,6 +82,14 @@ describe('runChecks', () => {
   it('warns when disk space is low', () => {
     expect(byName(healthyCtx({ freeBytes: () => 10 * 1024 ** 2 }), 'disk.free')?.status).toBe('warn');
   });
+
+  it('fails when a guard trigger is missing', () => {
+    const ctx = healthyCtx();
+    ctx.db.exec('DROP TRIGGER items_verified_not_reopened');
+    const r = byName(ctx, 'db.triggers');
+    expect(r).toMatchObject({ status: 'fail' });
+    expect(r?.detail).toContain('items_verified_not_reopened');
+  });
 });
 
 describe('formatReport', () => {
