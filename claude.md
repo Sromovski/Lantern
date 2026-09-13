@@ -484,7 +484,9 @@ Quote aggregator sites (BrainyQuote, Goodreads quotes, AZQuotes and friends) are
 **banned as sources**. They are the primary vector for misattribution and they
 launder each other's errors. They may not appear in `sources` at all. This ban,
 and the rule that every verified item needs at least one tier 1 or tier 2
-source, are enforced by SQLite triggers in `migrations/002_source_guards.sql`.
+source, are enforced in TypeScript (`assertSourceAllowed` / `insertSource` /
+`applyQuoteDecision`, which are authoritative), backed by SQLite triggers in
+migrations 002-004 as a best-effort backstop for writes that bypass that code.
 
 Additional hard rejects: quotes attributed to an author who died before the
 phrasing existed; any quote whose earliest traceable appearance is post-1990

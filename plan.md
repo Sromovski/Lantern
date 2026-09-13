@@ -1760,10 +1760,10 @@ How spec §8 maps onto the code:
 | Same line never enters twice (normalized, smart quotes folded) | `bodyHash` + `UNIQUE(vertical_id, body_hash)` |
 | Tier 1: exact normalized string located in PD full text | `locateQuote` → `primary-text` evidence |
 | Tier 3 alone is never enough | `decideQuote` + DB trigger `items_verified_requires_tier12` |
-| Wikiquote Misattributed/Disputed → hard reject | `decideQuote` (`listed-misattributed`) |
+| Wikiquote Misattributed/Disputed → hard reject | `decideQuote` (`listed-misattributed`); counts even when its URL is unparseable |
 | Sources conflict on attribution → hard reject | `decideQuote` (`attribution-conflict`, `author-mismatch`) |
 | Aggregator sites may not appear in `sources` at all | `assertSourceAllowed` + DB trigger `sources_no_banned_domains` |
-| Every verified item has ≥ 1 source | DB triggers (insert-as-verified blocked; last tier 1/2 source undeletable) |
+| Every verified item has ≥ 1 source | DB triggers 002-004 (insert-as-verified blocked; last tier 1/2 source cannot be deleted, downgraded, moved, or REPLACEd; verified item content immutable) |
 | Numbers in body must match a source excerpt exactly | `unsupportedNumbers` |
 
 Rules deliberately deferred to the harvester sub-plans (they need real data): "author died before the phrasing existed", "earliest appearance is post-1990 internet", and the Shakespeare canon list. With Tier 1/2 evidence required for every verified quote, these are defence in depth rather than the primary gate.
@@ -1784,10 +1784,18 @@ Part B was executed on branch `phase-2-verification-core`. Per-task review found
   - A sign counts only when it is not preceded by a letter or digit, so ranges (`10-20`) and labels (`COVID-19`) stay unsigned.
   - There is deliberately no lookbehind before digits, because a missed draft number would never be checked.
 
+A whole-branch final review of Part B found three further fail-open gaps, fixed in the same branch:
+
+- **F1 — negative evidence counts regardless of URL.** `usable()` (banned or unparseable URL → ignored) used to run on every evidence kind, so a `listed-misattributed` or `attribution-conflict` item with a protocol-relative or relative URL — routine in MediaWiki output — was dropped and the quote verified anyway. `usable()` now applies only to positive evidence (`primary-text`, `scholarly`, `reference`); negative evidence always counts.
+- **F2 — the primary-text excerpt must normalize-equal the quote.** `decideQuote` used to trust `primary-text.excerpt` blindly, so an unrelated or empty excerpt could verify a quote as tier 1. A `primary-text` item is now usable only when `normalizeText(excerpt) === normalizeText(quote)`; a non-matching or empty excerpt is ignored rather than triggering `author-mismatch`.
+- **F3 — migration `004_item_guards.sql` (new).** Four triggers close the item-mutation and REPLACE gaps: `items_verified_content_immutable` (a verified item's body/body_hash/subject_id/kind/vertical_id/work_title/work_year can no longer be rewritten), `items_verified_not_reopened` (verified → raw is blocked; verified → rejected stays allowed), `sources_append_only_by_id`, and `items_append_only_by_id` (both block `INSERT OR REPLACE` from reusing an existing id).
+
 ### File map for Part B
 
 ```
 migrations/002_source_guards.sql
+migrations/003_source_guards_update.sql
+migrations/004_item_guards.sql
 src/verify/normalize.ts        # normalizeWithMap, normalizeText, bodyHash, locateQuote
 src/verify/source-policy.ts    # banned + reference domains, assertSourceAllowed
 src/verify/quote-gate.ts       # decideQuote
@@ -1799,6 +1807,7 @@ tests/verify/source-policy.test.ts
 tests/verify/quote-gate.test.ts
 tests/verify/numbers.test.ts
 tests/db/source-guards.test.ts
+tests/db/item-guards.test.ts
 ```
 
 ### Task B1: Text normalization, body hash, and quote location
@@ -2688,13 +2697,30 @@ below, not later.
 
 | Item | Why it matters | Land before |
 |---|---|---|
-| **I4** — the migration runner cannot run a SQLite table-rebuild migration on a populated DB, because `PRAGMA foreign_keys=OFF` is a no-op inside a transaction, and tests only migrate empty DBs. | A table-rebuild migration (e.g. dropping/renaming a column) run against a real, populated `data/lantern.db` would either fail or silently skip the FK check. | **The first table-rebuild migration.** Fix: turn FKs off outside the transaction; run `PRAGMA foreign_key_check` before commit; add a test that applies `001`, seeds data, then applies the rest. |
+| **I4** — the migration runner cannot run a SQLite table-rebuild migration on a populated DB, because `PRAGMA foreign_keys=OFF` is a no-op inside a transaction, and tests only migrate empty DBs. | A table-rebuild migration (e.g. dropping/renaming a column) run against a real, populated `data/lantern.db` would either fail or silently skip the FK check. Additionally, any table-rebuild migration of `items` or `sources` must drop and recreate every guard trigger from 002–004: SQLite 3.53 with `legacy_alter_table=0` fails the rename while they exist, and `DROP TABLE` silently removes them. | **The first table-rebuild migration.** Fix: turn FKs off outside the transaction; run `PRAGMA foreign_key_check` before commit; add a test that applies `001`, seeds data, then applies the rest. For a rebuild of `items` or `sources`, drop and recreate the 002–004 guard triggers as part of the same migration. Add a doctor `fail` check asserting all expected guard trigger names exist in `sqlite_master`. |
 | **I6** — channel identity is keyed on the env var *name* (`account_ref`), not the underlying account. Renaming the var, or two names pointing at the same page id, creates a new `channel_id`, bypassing `UNIQUE(post_id, channel_id)` for the same real page. | Silently defeats the schema's core double-post guarantee (§6) once a channel is renamed or duplicated. | **Phase 4 queue/publish.** Fix: add a doctor/config `fail` when two channels on one platform resolve to the same env value; add a publish-time guard or an explicit channel-rename command; add the missing duplicate-destination test (A3); decide deliberately whether a removed-then-re-added channel keeps its old `auto_publish=1` (A5); update spec §6/§11. |
 | **Doctor exit-code contract for warnings** (Minor 3) — doctor currently exits 0 on warnings only. | Phase 5 alerting cannot key on a thin buffer or other warn-level conditions without a distinct exit code. | **Decide before Phase 5** (e.g. exit 2 = warnings). |
 | **Buffer definition** (Minor 9) — spec §12 asks for a 30-day buffer of *approved posts*, but doctor counts *scheduled publications*. | The buffer check can read healthy while the real safety margin (approved-but-unscheduled content) is thin. | **Resolve during the Phase 4 queue design.** |
 | **Missing channel credentials** (Minor 10) — `account_ref` unset is only a `warn`. | A live channel with no credential should never be allowed to reach `publish`. | **Make it `fail` for live channels in Phase 4.** |
 | **Unknown-command logging** (Minor 2) — a mistyped scheduled command exits 1 with nothing in `logs/`. | Silent failure defeats the "a cron job leaves a log" rationale in §4. | **Before Phase 5:** use commander `exitOverride()` and log the error. |
 | **Migration drift** (Minor 6) — doctor cannot detect a DB that is ahead of the code, or an applied migration file edited after the fact. | A hotfixed or hand-edited migration file would apply differently on a fresh environment than it did in production, undetected. | **Before Phase 5:** store a checksum of each LF-normalized file. |
+
+### Prerequisites carried from the Part B final review
+
+The whole-branch review of Part B found issues that are real but out of scope for
+the F1–F7 fix wave. They are not forgotten — they must land before the milestone
+named below, not later.
+
+| Item | Why it matters | Land before |
+|---|---|---|
+| **Canonical quote body** (review I2b). `locateQuote` ignores punctuation, case and apostrophes, and nothing replaces `items.body` with the located source text. | A harvester or model could publish altered punctuation or wording as "verified". | **2.1.** Decide in spec §8 whether the published text is the stored excerpt, or must equal it apart from typographic folding. |
+| **Apply takes evidence, not a decision** (review I2c). `applyQuoteDecision` accepts any hand-built `QuoteDecision`. | Nothing stops a caller from constructing a `verified` decision without ever running `decideQuote`. | **2.3.** Consider `verifyQuoteItem(db, itemId, evidence)`, which reads the body inside the transaction and runs `decideQuote` itself. This is a breaking signature change. |
+| **Total gate and typed apply errors** (review M1 + M10). `decideQuote` can return a `verified` decision that `insertSource` rejects: a scholarly or primary URL on a reference domain, or an empty citation. `applyQuoteDecision` throws a plain `Error` for "not raw", and `reject_reason` packs the reason into one string. | A gate that can pass its own downstream policy check is not a total function; an untyped "not raw" error and a packed reject reason are hard to handle programmatically. | **2.3.** Run `assertSourceAllowed` inside the gate and reject with a `source-policy` reason. Add a typed error, `reopenInsufficientEvidence`, and a `kind = 'quote'` check. |
+| **Stricter numbers** (review I6). All of these are currently reported as supported: `93 billion` vs `93 million`; `10³` vs `10²`; `1850s` vs `1850`; `70%` vs `70 countries`; draft `40` vs a source `–40` written with an en dash. | Context-free digit matching alone lets scale, exponent, decade and percent errors through. | **2.4.** Fix by making the token include scale words, superscripts and `%`/percent, and by adding U+2012, U+2013, U+FE63 and U+FF0D to the sign class. Document that context-free pool matching is §8's own definition, and that the fact-check model pass covers context. |
+| **Normalization hardening + golden hash** (review M4 + deferred B1 tests). Soft hyphens and zero-width characters currently split words; they should be deleted (`\p{Cf}`). | Any normalization change after rows exist shifts `body_hash` and wipes the rejection dedupe memory. | **2.1, before it inserts its first row.** Add astral, ligature and dotted-I tests, and pin a golden `bodyHash` test. |
+| **Large-text performance** (review M5). `locateQuote` re-normalizes the haystack on every call: about 700 ms and 90 MB per call on a 2 MB text. | Harvesting against full-length public-domain texts at scale would be slow and memory-heavy. | **2.1.** Add `prepareHaystack()` + `locateQuoteIn()` (additive) and use a `Uint32Array` map. |
+| **Tier 1/2 host allowlists** (review M3). Tiers are currently caller-asserted, with only a denylist behind them. | Adding a required field later (e.g. `authorMatches` on scholarly evidence) breaks `QuoteEvidence`. | **2.1 / 2.2.** Add allowlists for primary-text (public-domain text hosts) and scholarly sources, and add `authorMatches` to scholarly evidence. |
+| **Archive-wrapped aggregator URLs** (review M2). `https://web.archive.org/web/2019/https://www.brainyquote.com/...` passes `assertSourceAllowed` but fails the SQL trigger with a raw `SqliteError`. | A wrapped aggregator URL should fail the same way every other banned URL does — as a typed `SourcePolicyError`, not a raw SQLite error. | **2.2.** Add a decoded substring check to `source-policy.ts`. |
 
 Every milestone below follows the same opening ritual:
 
