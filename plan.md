@@ -2664,6 +2664,22 @@ git commit -m "feat(verify): programmatic numeric claim check"
 
 ## Part C — Milestones (each gets its own detailed plan before work starts)
 
+### Prerequisites carried from the Phase 1 final review
+
+The whole-branch review of Part A found issues that are real but out of scope for
+that fix wave. They are not forgotten — they must land before the milestone named
+below, not later.
+
+| Item | Why it matters | Land before |
+|---|---|---|
+| **I4** — the migration runner cannot run a SQLite table-rebuild migration on a populated DB, because `PRAGMA foreign_keys=OFF` is a no-op inside a transaction, and tests only migrate empty DBs. | A table-rebuild migration (e.g. dropping/renaming a column) run against a real, populated `data/lantern.db` would either fail or silently skip the FK check. | **The first table-rebuild migration.** Fix: turn FKs off outside the transaction; run `PRAGMA foreign_key_check` before commit; add a test that applies `001`, seeds data, then applies the rest. |
+| **I6** — channel identity is keyed on the env var *name* (`account_ref`), not the underlying account. Renaming the var, or two names pointing at the same page id, creates a new `channel_id`, bypassing `UNIQUE(post_id, channel_id)` for the same real page. | Silently defeats the schema's core double-post guarantee (§6) once a channel is renamed or duplicated. | **Phase 4 queue/publish.** Fix: add a doctor/config `fail` when two channels on one platform resolve to the same env value; add a publish-time guard or an explicit channel-rename command; add the missing duplicate-destination test (A3); decide deliberately whether a removed-then-re-added channel keeps its old `auto_publish=1` (A5); update spec §6/§11. |
+| **Doctor exit-code contract for warnings** (Minor 3) — doctor currently exits 0 on warnings only. | Phase 5 alerting cannot key on a thin buffer or other warn-level conditions without a distinct exit code. | **Decide before Phase 5** (e.g. exit 2 = warnings). |
+| **Buffer definition** (Minor 9) — spec §12 asks for a 30-day buffer of *approved posts*, but doctor counts *scheduled publications*. | The buffer check can read healthy while the real safety margin (approved-but-unscheduled content) is thin. | **Resolve during the Phase 4 queue design.** |
+| **Missing channel credentials** (Minor 10) — `account_ref` unset is only a `warn`. | A live channel with no credential should never be allowed to reach `publish`. | **Make it `fail` for live channels in Phase 4.** |
+| **Unknown-command logging** (Minor 2) — a mistyped scheduled command exits 1 with nothing in `logs/`. | Silent failure defeats the "a cron job leaves a log" rationale in §4. | **Before Phase 5:** use commander `exitOverride()` and log the error. |
+| **Migration drift** (Minor 6) — doctor cannot detect a DB that is ahead of the code, or an applied migration file edited after the fact. | A hotfixed or hand-edited migration file would apply differently on a fresh environment than it did in production, undetected. | **Before Phase 5:** store a checksum of each LF-normalized file. |
+
 Every milestone below follows the same opening ritual:
 
 1. Fetch one or more **real** responses from each external API it touches and save them under `data/cache/<source>/`.

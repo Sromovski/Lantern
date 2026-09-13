@@ -126,6 +126,11 @@ four and taken on the fifth is not free.
 - **node-cron** inside a long-lived process, or system cron calling the CLI.
   Prefer system cron — a crashed daemon silently stops posting; a cron job
   leaves a log.
+  The CLI locates the project root from its own install location, not the
+  working directory (override with `LANTERN_ROOT`); `.env` is read from that
+  root, with shell environment variables taking precedence — so a Windows
+  Task Scheduler entry needs no "Start in" directory. `lantern doctor` exits
+  1 on any failed check and 0 otherwise.
 - **Config:** `.env` for secrets (never committed), `config/verticals/*.yaml`
   for vertical definitions, `config/channels/*.yaml` for destinations.
 - **Logging:** structured JSON lines to `logs/`, plus a human-readable run
@@ -155,7 +160,8 @@ lantern/
   migrations/
   src/
     cli.ts              # entry point, subcommands
-    db/                 # schema, queries, migration runner
+    config/             # vertical/channel YAML schemas + loader
+    db/                 # schema, migration runner, config→DB sync
     harvest/            # source adapters — where raw candidates come from
     verify/             # attribution + fact gates
     enrich/             # Claude calls that write the post body
@@ -173,7 +179,7 @@ lantern/
     schedule/           # queue selection, cadence, spacing
     review/             # local web UI for the review queue
     doctor/             # health checks (lantern doctor)
-    lib/                # http client w/ retry, cache, logging, config
+    lib/                # logging, run_log stage wrapper, paths (http client + cache later)
   tests/
   logs/
 ```
@@ -370,6 +376,11 @@ Indexes: `items(status, vertical_id)`, `items(body_hash)`,
 `posts(status, vertical_id)`, `renditions(post_id, status)`,
 `publications(status, scheduled_for)`, `publications(channel_id, published_at)`,
 `run_log(stage, created_at)` (for `doctor` health checks that query by stage and time).
+
+All TEXT timestamp columns hold UTC ISO-8601 strings with a `Z` suffix (as
+produced by `Date.prototype.toISOString()`), so they compare correctly as
+strings; local times such as channel cadence `times` are converted to UTC
+before they are stored.
 
 The `UNIQUE(post_id, channel_id)` on `publications` is the single most important
 constraint in the schema: it makes double-posting the same content to the same
