@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 const APOSTROPHES = new Set(["'", '\u2018', '\u2019', '\u201B', '\u02BC', '`']);
 const WORD_CHAR = /[\p{L}\p{N}\p{M}]/u;
+const FORMAT_CHAR = /\p{Cf}/u;
 
 export interface NormalizedText {
   source: string;
@@ -17,7 +18,7 @@ export function normalizeWithMap(input: string): NormalizedText {
 
   for (let i = 0; i < source.length; ) {
     const ch = String.fromCodePoint(source.codePointAt(i)!);
-    if (!APOSTROPHES.has(ch)) {
+    if (!APOSTROPHES.has(ch) && !FORMAT_CHAR.test(ch)) {
       for (const out of ch.normalize('NFKC').toLowerCase()) {
         if (!WORD_CHAR.test(out)) {
           pendingSpace = true;

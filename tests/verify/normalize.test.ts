@@ -68,3 +68,44 @@ describe('locateQuote', () => {
     expect(locateQuote(' \u2014 ', TALE)).toBeNull();
   });
 });
+
+describe('normalization hardening', () => {
+  it('pins the golden body hash so normalization changes are deliberate', () => {
+    expect(bodyHash('It was the best of times, it was the worst of times.')).toBe(
+      'af8da705bfd95621983e5cf4232ac1ca0c79b47122e3defd8a98fa9a4387d985',
+    );
+  });
+
+  it('deletes soft hyphens and zero-width characters instead of splitting words', () => {
+    expect(normalizeText('won\u00adderful')).toBe('wonderful');
+    expect(normalizeText('won\u200bder\u200dful\u2060ly')).toBe('wonderfully');
+    expect(normalizeText('\ufeffhello\u200e world')).toBe('hello world');
+  });
+
+  it('does not locate a quote that starts mid-word across a soft hyphen', () => {
+    expect(locateQuote('derful thing to see today', 'a won\u00adderful thing to see today')).toBeNull();
+  });
+
+  it('locates across a soft hyphen and keeps it in the excerpt', () => {
+    expect(locateQuote('wonderful thing', 'a won\u00adderful thing')).toEqual({
+      start: 2,
+      end: 18,
+      excerpt: 'won\u00adderful thing',
+    });
+  });
+
+  it('handles astral characters, ligatures and dotted capital I', () => {
+    expect(normalizeText('\u{1D518}nicorn')).toBe('unicorn');
+    expect(normalizeText('\ufb01ne')).toBe('fine');
+    expect(normalizeText('\u0130stanbul')).toBe('i\u0307stanbul');
+  });
+
+  it('maps excerpts correctly around astral characters and ligatures', () => {
+    const text = 'the \u{1D518}nicorn has a \ufb01ne horn';
+    expect(locateQuote('unicorn has a fine horn', text)).toEqual({
+      start: 4,
+      end: text.length,
+      excerpt: '\u{1D518}nicorn has a \ufb01ne horn',
+    });
+  });
+});
