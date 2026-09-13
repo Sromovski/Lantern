@@ -199,4 +199,21 @@ describe('migrate', () => {
     rmSync(join(dir, '002_u.sql'));
     expect(migrationDrift(db, dir)).toEqual({ edited: [], unknown: ['002_u.sql'], unrecorded: [] });
   });
+
+  it('refuses to migrate a database that already has foreign key violations, and says so', () => {
+    const dir = tempMigrationsDir({
+      '001_parent.sql':
+        'CREATE TABLE parent (id INTEGER PRIMARY KEY); CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parent(id));',
+    });
+    const db = openDb(':memory:');
+    migrate(db, dir);
+    db.pragma('foreign_keys = OFF');
+    db.prepare('INSERT INTO child VALUES (1, 999)').run();
+    db.pragma('foreign_keys = ON');
+    writeFileSync(join(dir, '002_unrelated.sql'), 'CREATE TABLE unrelated (id INTEGER PRIMARY KEY);');
+    expect(() => migrate(db, dir)).toThrow(/database already has 1 foreign key violation\(s\) before migration 002_unrelated\.sql/);
+    expect(pendingMigrations(db, dir)).toEqual(['002_unrelated.sql']);
+    expect(db.prepare("SELECT COUNT(*) FROM sqlite_master WHERE name = 'unrelated'").pluck().get()).toBe(0);
+    expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+  });
 });

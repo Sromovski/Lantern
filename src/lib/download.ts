@@ -103,6 +103,7 @@ export async function downloadWithRetry(url: string, destPath: string, opts: Dow
   mkdirSync(dirname(destPath), { recursive: true });
   const tmp = `${destPath}.${process.pid}.tmp`;
   let lastError: unknown;
+  let done: { res: Response; bytes: number; sha256: string } | undefined;
 
   for (let attempt = 1; attempt <= o.maxAttempts; attempt++) {
     const signal = AbortSignal.timeout(o.timeoutMs);
@@ -119,16 +120,8 @@ export async function downloadWithRetry(url: string, destPath: string, opts: Dow
         continue;
       }
       const { bytes, sha256 } = await writeBody(res, tmp, url, maxBytes, signal);
-      renameSync(tmp, destPath);
-      return {
-        url,
-        finalUrl: res.url || url,
-        status: res.status,
-        headers: Object.fromEntries(res.headers.entries()),
-        path: destPath,
-        bytes,
-        sha256,
-      };
+      done = { res, bytes, sha256 };
+      break;
     } catch (err) {
       rmSync(tmp, { force: true });
       if (err instanceof DownloadStatusError || err instanceof DownloadTooLargeError) throw err;
@@ -137,5 +130,25 @@ export async function downloadWithRetry(url: string, destPath: string, opts: Dow
     }
   }
 
-  throw new HttpError(`network failure after ${o.maxAttempts} attempts: ${url}`, url, o.maxAttempts, { cause: lastError });
+  if (done === undefined) {
+    throw new HttpError(`network failure after ${o.maxAttempts} attempts: ${url}`, url, o.maxAttempts, { cause: lastError });
+  }
+  // A failed rename (for example a destination held open on Windows) is not a network failure;
+  // downloading again would not help, so remove the temp file and surface the error once.
+  try {
+    renameSync(tmp, destPath);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+  const { res, bytes, sha256 } = done;
+  return {
+    url,
+    finalUrl: res.url || url,
+    status: res.status,
+    headers: Object.fromEntries(res.headers.entries()),
+    path: destPath,
+    bytes,
+    sha256,
+  };
 }

@@ -72,6 +72,12 @@ export function migrate(db: Db, dir: string): { applied: string[]; current: stri
     db.pragma('foreign_keys = OFF');
     try {
       db.transaction(() => {
+        const existing = db.pragma('foreign_key_check') as unknown[];
+        if (existing.length > 0) {
+          throw new Error(
+            `database already has ${existing.length} foreign key violation(s) before migration ${file}; fix them first: ${JSON.stringify(existing.slice(0, 5))}`,
+          );
+        }
         db.exec(sql);
         const violations = db.pragma('foreign_key_check') as unknown[];
         if (violations.length > 0) {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -43,6 +43,16 @@ function lantern(args: string[], scratch: string, opts: LanternOpts = {}) {
     env,
   });
   return { code: res.status, out: res.stdout + res.stderr };
+}
+
+function logRecords(logs: string): Record<string, unknown>[] {
+  if (!existsSync(logs)) return [];
+  return readdirSync(logs).flatMap((file) =>
+    readFileSync(join(logs, file), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>),
+  );
 }
 
 describe('lantern CLI', () => {
@@ -106,5 +116,23 @@ describe('lantern CLI', () => {
 
     expect(existsSync(join(scratch, 'custom', 'fromdotenv.db'))).toBe(true);
     expect(existsSync(join(scratch, 'dotenvlogs'))).toBe(true);
+  }, 30_000);
+
+  it('logs a mistyped command to logs/ and exits 1', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    const res = lantern(['doctr'], scratch);
+    expect(res.code).toBe(1);
+    expect(res.out).toContain("unknown command 'doctr'");
+    expect(logRecords(join(scratch, 'logs'))).toEqual([
+      expect.objectContaining({ level: 'error', msg: 'command rejected', code: 'commander.unknownCommand' }),
+    ]);
+  }, 30_000);
+
+  it('exits 0 for --help without logging an error', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    const res = lantern(['--help'], scratch);
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('Usage: lantern');
+    expect(logRecords(join(scratch, 'logs')).filter((r) => r.level === 'error')).toEqual([]);
   }, 30_000);
 });

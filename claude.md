@@ -449,8 +449,12 @@ spacing rules in §12.
 
 **`lantern publish`**
 Take every publication with `scheduled_for <= now` and `status='scheduled'`,
-hand it to the right adapter, record the result. Retries with backoff; three
-failures marks it `failed` and alerts.
+hand it to the right adapter, record the result. Retries with backoff only when
+the platform shows it did not act on the request (such as a 429); an ambiguous
+outcome after the request was sent (a timeout, a dropped connection, a 5xx)
+marks it `failed` and alerts rather than risk a second post, unless the adapter
+confirms remotely that nothing was created. Three failures marks it `failed`
+and alerts.
 
 **`lantern review`**
 Small local web UI on `localhost:4321` showing the `needs_review` queue: every
@@ -722,9 +726,10 @@ Respect each platform's headers. Exponential backoff on 5xx and rate limits.
 Never retry a 4xx that is not a rate limit — fix it instead. A POST is sent
 once: after a network error, timeout or 5xx it is not retried, because the
 platform may already have acted on it; only a 429 is retried, unless the adapter
-opts in with an idempotency key. Every attempt increments `publications.attempt`;
-the `UNIQUE(post_id, channel_id)` constraint plus `idempotency_key` make a
-duplicate post structurally impossible even if a retry races.
+sets `retryUnsafe` because the platform de-duplicates retries (for example by an
+idempotency key). Every attempt increments `publications.attempt`; the
+`UNIQUE(post_id, channel_id)` constraint plus `idempotency_key` make a duplicate
+post structurally impossible even if a retry races.
 
 ## 12. Scheduling
 

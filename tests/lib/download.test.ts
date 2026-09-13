@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -213,5 +213,22 @@ describe('downloadWithRetry', () => {
     });
     await expect(downloadWithRetry(`${srv.base}/x`, join(dir, 'x'), { userAgent: UA, maxBytes: 0 })).rejects.toThrow(RangeError);
     expect(srv.requests()).toBe(0);
+  });
+
+  it('does not re-download when only the final rename fails', async () => {
+    const srv = await serve((_req, res) => {
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': String(PAYLOAD.length) });
+      res.end(PAYLOAD);
+    });
+    const { sleep, calls } = recordingSleep();
+    const dest = join(dir, 'occupied.jpg');
+    mkdirSync(join(dest, 'inside'), { recursive: true });
+    const err = await downloadWithRetry(`${srv.base}/x.jpg`, dest, { userAgent: UA, sleep }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(HttpError);
+    expect(srv.requests()).toBe(1);
+    expect(calls).toEqual([]);
+    expect(existsSync(join(dest, 'inside'))).toBe(true);
+    expect(leftovers()).toEqual([]);
   });
 });
