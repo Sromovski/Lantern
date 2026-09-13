@@ -41,6 +41,23 @@ plan.md                      # F2, F4: status notes on the prerequisite rows and
 
 ---
 
+## As built — where the committed code differs from the task code below
+
+Per-task review found gaps in some of the reference code. Those gaps were fixed, so where the code and this plan disagree, **the committed code is authoritative**:
+
+- **F2 — equivalence test.** The reference test "locateQuoteIn … matches locateQuote" compared the function with its own wrapper, so it could never fail. As built, it asserts exact hand-computed offsets (0..52, 65..78, 72..78, and `null` for a miss) plus one delegation check. It was proven to fail when the end-offset computation was deliberately broken.
+- **F3 — `retryDelayMs`.** `Date.parse` runs only when the `Retry-After` value contains a letter. Bare numerics such as `1.5` or `-1`, which `Date.parse` reads as dates in 2001, now fall back to exponential backoff instead of retrying instantly.
+- **F3 — body read inside the retry.** `res.text()` runs inside the same `try` as `fetch`. A truncated body is therefore retried, and if every attempt is truncated it is thrown as `HttpError` with the read error as `cause`.
+- **F3 — User-Agent.** Headers are built with `new Headers(req.headers)` followed by `.set('user-agent', …)`, so a caller header of any letter case cannot be merged with the contact User-Agent.
+- **F3 — `maxAttempts` guard.** `maxAttempts` must be an integer ≥ 1; otherwise a `RangeError` is thrown before any request.
+- **Test counts.** F3 has 28 tests, not 19, so the full-suite targets become 158 after F3 and 173 after F4 (not 149 and 164).
+
+Deferred and recorded in `plan.md` Part C prerequisites:
+- A request timeout / `AbortSignal`.
+- Validating caller headers outside the retry `try`. An invalid header name is currently retried and then reported as a network `HttpError`.
+
+---
+
 ### Task F1: Normalization hardening and golden hash
 
 **Files:**
