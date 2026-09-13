@@ -3,8 +3,8 @@ const NUMERAL = /(?:(?<![\p{L}\p{N}])[-\u2212])?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|
 export function extractNumbers(text: string): string[] {
   return [...text.matchAll(NUMERAL)].map((m) => {
     let canonical = m[0].replaceAll(',', '').replace('\u2212', '-');
-    // Add leading 0 to decimals: .5 → 0.5, -.25 → -0.25
-    canonical = canonical.replace(/^(-)?\./, '$10.');
+    // Add leading 0 to decimals: .5 -> 0.5, -.25 -> -0.25
+    canonical = canonical.replace(/^(-)?\./, (_match, sign: string | undefined) => `${sign ?? ''}0.`);
     return canonical;
   });
 }
