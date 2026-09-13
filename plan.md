@@ -1768,6 +1768,22 @@ How spec §8 maps onto the code:
 
 Rules deliberately deferred to the harvester sub-plans (they need real data): "author died before the phrasing existed", "earliest appearance is post-1990 internet", and the Shakespeare canon list. With Tier 1/2 evidence required for every verified quote, these are defence in depth rather than the primary gate.
 
+### As built — where the committed code differs from the task code below
+
+Part B was executed on branch `phase-2-verification-core`. Per-task review found fail-open gaps in some of the reference code in B2 and B4, and those gaps were fixed. **The committed code is authoritative.** Where it differs from the task code below:
+
+- **B2 — migration `003_source_guards_update.sql` (new).** Migration 002 is append-only once applied, so these guards live in 003:
+  - `sources_tier_range_on_update` — the tier-range rule now also applies to `UPDATE OF tier`.
+  - `sources_keep_last_tier12_on_downgrade` — a verified item's last tier 1/2 source cannot be changed to tier 3. Without this, the item stays `verified` with no qualifying source, which breaks spec §6.
+  - `sources_item_id_immutable` — sources cannot be moved between items.
+- **B2 — `hostOf` strips trailing dots** (`brainyquote.com.` → `brainyquote.com`). Without this, a trailing-dot aggregator URL passed `isBannedSource` and surfaced as a raw `SqliteError` instead of `SourcePolicyError`.
+- **B2 — correction to the rationale below.** The SQL `LIKE` triggers do **not** "only over-reject". They cannot decode percent-encoded hosts (`brainyquote%2Ecom`), so they are a best-effort backstop for hand-typed SQL. `assertSourceAllowed`, called by `insertSource`, parses the URL and is the authoritative check.
+- **B4 — `NUMERAL` keeps sign and magnitude.** The reference regex dropped minus signs (`-5` was supported by a source saying `5`) and leading-decimal magnitude (`.5` became `5`). Both let a wrong number through.
+  - The committed pattern is `/(?:(?<![\p{L}\p{N}])[-\u2212])?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|(?<!\d)\.\d+)/gu`.
+  - Canonicalization: strip commas, map U+2212 to `-`, prefix a bare `.` with `0`.
+  - A sign counts only when it is not preceded by a letter or digit, so ranges (`10-20`) and labels (`COVID-19`) stay unsigned.
+  - There is deliberately no lookbehind before digits, because a missed draft number would never be checked.
+
 ### File map for Part B
 
 ```
@@ -1990,7 +2006,7 @@ git commit -m "feat(verify): normalization, body hash, and whole-word quote loca
   - `insertSource(db: Db, itemId: number, src: SourceInput, now?: Date): number`
   - Test helper `seedItem(db: Db, body?: string): { verticalId: number; itemId: number }`
 
-Two layers on purpose. The TypeScript policy gives good error messages; the SQL triggers make the rules hold even for a hand-typed `INSERT` in the sqlite shell or a future bug that bypasses `insertSource`. The trigger's `LIKE '%domain%'` is cruder than the host match — it can only over-reject, which is the safe direction. A test keeps the two lists in sync.
+Two layers on purpose. The TypeScript policy gives good error messages; the SQL triggers make the rules hold even for a hand-typed `INSERT` in the sqlite shell or a future bug that bypasses `insertSource`. The trigger's `LIKE '%domain%'` is cruder than the host match. It does not decode percent-encoded hosts, so it is only a best-effort backstop; `assertSourceAllowed` is authoritative (see "As built" at the top of Part B). A test keeps the two lists in sync.
 
 Goodreads is banned as a whole domain, not just `/quotes`: nothing on it is a Tier 1 or 2 source for this project.
 
