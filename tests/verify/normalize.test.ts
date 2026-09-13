@@ -108,6 +108,26 @@ describe('normalization hardening', () => {
       excerpt: '\u{1D518}nicorn has a \ufb01ne horn',
     });
   });
+
+  it('pins a second golden hash covering apostrophe, format, ligature, astral, dash and CRLF paths', () => {
+    const input = 'Don\uFF07t \u2018quote\u2019 the wo\u00ADnderful \uFB01re\u2014\u{1D518}nicorn\r\nplease';
+    expect(normalizeText(input)).toBe('dont quote the wonderful fire unicorn please');
+    expect(bodyHash(input)).toBe('a367e9b24649d525eb0650315ba11b19822f46f7a8f306cdab78437688884731');
+  });
+
+  it('drops apostrophes that only appear after compatibility normalization', () => {
+    expect(normalizeText('don\uFF07t')).toBe('dont');
+    expect(normalizeText('don\uFF40t')).toBe('dont');
+    expect(normalizeText('\u0149')).toBe('n');
+  });
+
+  it('locates a quote across a full-width apostrophe', () => {
+    expect(locateQuoteIn('dont go', prepareHaystack('He said don\uFF07t go.'))).toEqual({
+      start: 8,
+      end: 16,
+      excerpt: 'don\uFF07t go',
+    });
+  });
 });
 
 describe('prepared haystack', () => {

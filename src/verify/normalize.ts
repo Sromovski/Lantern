@@ -44,6 +44,7 @@ export function normalizeWithMap(input: string): NormalizedText {
     const ch = String.fromCodePoint(source.codePointAt(i)!);
     if (!APOSTROPHES.has(ch) && !FORMAT_CHAR.test(ch)) {
       for (const out of ch.normalize('NFKC').toLowerCase()) {
+        if (APOSTROPHES.has(out)) continue;
         if (!WORD_CHAR.test(out)) {
           pendingSpace = true;
           continue;
