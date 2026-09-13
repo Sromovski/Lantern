@@ -1,5 +1,6 @@
 import { openDb, type Db } from '../../src/db/connection.js';
 import { migrate, MIGRATIONS_DIR } from '../../src/db/migrate.js';
+import { bodyHash } from '../../src/verify/normalize.js';
 
 export function testDb(): Db {
   const db = openDb(':memory:');
@@ -37,4 +38,17 @@ export function seedPublicationChain(db: Db) {
     postId, NOW,
   );
   return { verticalId, channelId, itemId, postId, renditionId, captionId };
+}
+
+export function seedItem(db: Db, body = 'It was the best of times, it was the worst of times') {
+  db.prepare(
+    "INSERT OR IGNORE INTO verticals (slug, name, config_path) VALUES ('literature', 'The Commonplace Book', 'config/verticals/literature.yaml')",
+  ).run();
+  const verticalId = db.prepare("SELECT id FROM verticals WHERE slug = 'literature'").pluck().get() as number;
+  const itemId = Number(
+    db
+      .prepare("INSERT INTO items (vertical_id, kind, body, body_hash, status, created_at) VALUES (?, 'quote', ?, ?, 'raw', ?)")
+      .run(verticalId, body, bodyHash(body), NOW).lastInsertRowid,
+  );
+  return { verticalId, itemId };
 }
