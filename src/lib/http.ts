@@ -59,8 +59,10 @@ export function retryDelayMs(
   if (retryAfter !== null) {
     const trimmed = retryAfter.trim();
     if (/^\d+$/.test(trimmed)) return Math.min(Number(trimmed) * 1000, opts.maxDelayMs);
-    const at = Date.parse(trimmed);
-    if (!Number.isNaN(at)) return Math.min(Math.max(0, at - opts.nowMs), opts.maxDelayMs);
+    if (/[a-z]/i.test(trimmed)) {
+      const at = Date.parse(trimmed);
+      if (!Number.isNaN(at)) return Math.min(Math.max(0, at - opts.nowMs), opts.maxDelayMs);
+    }
   }
   return Math.min(opts.baseDelayMs * 2 ** (attempt - 1), opts.maxDelayMs);
 }
@@ -69,6 +71,9 @@ const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(reso
 
 export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promise<HttpResult> {
   const maxAttempts = opts.maxAttempts ?? DEFAULTS.maxAttempts;
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new RangeError(`maxAttempts must be an integer >= 1, got ${maxAttempts}`);
+  }
   const delays = {
     baseDelayMs: opts.baseDelayMs ?? DEFAULTS.baseDelayMs,
     maxDelayMs: opts.maxDelayMs ?? DEFAULTS.maxDelayMs,
@@ -80,12 +85,12 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let res: Response;
+    let body: string;
     try {
-      res = await fetchImpl(req.url, {
-        method: req.method ?? 'GET',
-        headers: { ...req.headers, 'user-agent': opts.userAgent },
-        body: req.body,
-      });
+      const headers = new Headers(req.headers);
+      headers.set('user-agent', opts.userAgent);
+      res = await fetchImpl(req.url, { method: req.method ?? 'GET', headers, body: req.body });
+      body = await res.text();
     } catch (err) {
       lastError = err;
       if (attempt < maxAttempts) await sleep(retryDelayMs(attempt, null, { ...delays, nowMs: now() }));
@@ -95,7 +100,7 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
       url: req.url,
       status: res.status,
       headers: Object.fromEntries(res.headers.entries()),
-      body: await res.text(),
+      body,
     };
     if (!isRetryableStatus(res.status) || attempt === maxAttempts) return result;
     await sleep(retryDelayMs(attempt, res.headers.get('retry-after'), { ...delays, nowMs: now() }));

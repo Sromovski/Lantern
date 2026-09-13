@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { buildUserAgent, fetchWithRetry, HttpError, retryDelayMs } from '../../src/lib/http.js';
 
@@ -31,6 +31,25 @@ async function scriptedServer(responses: Scripted[]) {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return { base: `http://127.0.0.1:${port}`, seen };
+}
+
+/** First `truncateFirst` requests get headers + a partial body, then the socket is destroyed. */
+async function truncatingServer(truncateFirst: number) {
+  let count = 0;
+  const server = createServer((_req, res) => {
+    count++;
+    if (count <= truncateFirst) {
+      res.writeHead(200, { 'content-length': '100' });
+      res.write('partial');
+      setImmediate(() => res.socket?.destroy());
+    } else {
+      res.writeHead(200);
+      res.end('ok');
+    }
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, count: () => count };
 }
 
 afterEach(async () => {
@@ -143,6 +162,58 @@ describe('fetchWithRetry', () => {
     expect(attempts).toBe(3);
     expect(calls).toEqual([500, 1000]);
   });
+
+  it('lets the contact User-Agent win over a caller header of any case and keeps other headers', async () => {
+    let captured: IncomingHttpHeaders = {};
+    const server = createServer((req, res) => {
+      captured = req.headers;
+      res.writeHead(200);
+      res.end();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const { sleep } = recordingSleep();
+    await fetchWithRetry(
+      { url: base, headers: { 'User-Agent': 'CallerUA/1.0', Accept: 'application/json' } },
+      { userAgent: UA, sleep },
+    );
+    expect(captured['user-agent']).toBe(UA);
+    expect(captured.accept).toBe('application/json');
+  });
+
+  it('retries a response whose body is cut off mid-stream', async () => {
+    const srv = await truncatingServer(1);
+    const { sleep, calls } = recordingSleep();
+    const res = await fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep });
+    expect(res).toMatchObject({ status: 200, body: 'ok' });
+    expect(srv.count()).toBe(2);
+    expect(calls).toEqual([500]);
+  });
+
+  it('throws HttpError when every response body is cut off', async () => {
+    const srv = await truncatingServer(99);
+    const { sleep, calls } = recordingSleep();
+    const err = await fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep, maxAttempts: 2 }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ attempts: 2 });
+    expect((err as HttpError).cause).toBeInstanceOf(Error);
+    expect(calls).toEqual([500]);
+  });
+
+  it.each([0, -1, 1.5])('rejects maxAttempts %s without making a request', async (maxAttempts) => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      throw new Error('unreachable');
+    }) as unknown as typeof fetch;
+    await expect(
+      fetchWithRetry({ url: 'http://127.0.0.1:1/' }, { userAgent: UA, fetchImpl, maxAttempts }),
+    ).rejects.toThrow(RangeError);
+    expect(called).toBe(false);
+  });
 });
 
 describe('retryDelayMs', () => {
@@ -158,6 +229,14 @@ describe('retryDelayMs', () => {
 
   it('never returns a negative delay for an HTTP date in the past', () => {
     expect(retryDelayMs(1, 'Thu, 01 Jan 1970 00:00:00 GMT', { ...opts, nowMs: 10_000 })).toBe(0);
+  });
+
+  it.each(['1.5', '-1'])('treats the malformed Retry-After %j as absent', (value) => {
+    expect(retryDelayMs(2, value, { ...opts, nowMs: Date.parse('2026-01-01T00:00:00Z') })).toBe(1000);
+  });
+
+  it('trims whitespace around a numeric Retry-After', () => {
+    expect(retryDelayMs(1, ' 2 ', opts)).toBe(2000);
   });
 });
 
