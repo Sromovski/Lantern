@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { config as loadDotenv } from 'dotenv';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { loadConfig } from './config/load.js';
 import { openDb } from './db/connection.js';
 import { migrate } from './db/migrate.js';
@@ -9,11 +9,12 @@ import { syncConfig } from './db/sync.js';
 import { runChecks } from './doctor/checks.js';
 import { exitCode, formatReport } from './doctor/report.js';
 import { createLogger } from './lib/log.js';
-import { resolvePaths } from './lib/paths.js';
+import { findProjectRoot, resolvePaths } from './lib/paths.js';
 import { runStage } from './lib/run-stage.js';
 
-const paths = resolvePaths();
-loadDotenv({ path: join(paths.root, '.env'), quiet: true });
+const root = resolve(process.env.LANTERN_ROOT ?? findProjectRoot());
+loadDotenv({ path: join(root, '.env'), quiet: true });
+const paths = resolvePaths(process.env, root);
 const log = createLogger({ dir: paths.logs });
 
 const program = new Command().name('lantern').description('Automated educational social content engine');

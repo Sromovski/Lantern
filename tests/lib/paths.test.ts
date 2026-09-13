@@ -1,23 +1,49 @@
 import { describe, it, expect } from 'vitest';
 import { join, resolve } from 'node:path';
-import { resolvePaths } from '../../src/lib/paths.js';
+import { existsSync, mkdtempSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { findProjectRoot, resolvePaths } from '../../src/lib/paths.js';
 
 describe('resolvePaths', () => {
-  it('defaults everything under the working directory', () => {
-    const cwd = resolve('/work/lantern');
-    expect(resolvePaths({}, cwd)).toEqual({
-      root: cwd,
-      db: join(cwd, 'data', 'lantern.db'),
-      logs: join(cwd, 'logs'),
-      migrations: join(cwd, 'migrations'),
+  it('defaults everything under the given default root', () => {
+    const defaultRoot = resolve('/work/lantern');
+    expect(resolvePaths({}, defaultRoot)).toEqual({
+      root: defaultRoot,
+      db: join(defaultRoot, 'data', 'lantern.db'),
+      logs: join(defaultRoot, 'logs'),
+      migrations: join(defaultRoot, 'migrations'),
     });
   });
 
-  it('honours overrides, resolving relative ones against the root', () => {
+  it('honours overrides, resolving relative ones against LANTERN_ROOT rather than the default root', () => {
     const root = resolve('/srv/lantern');
+    const defaultRoot = resolve('/elsewhere');
     const abs = resolve('/tmp/test.db');
-    const p = resolvePaths({ LANTERN_ROOT: root, LANTERN_DB: abs, LANTERN_LOGS: 'var/logs' }, '/elsewhere');
+    const p = resolvePaths({ LANTERN_ROOT: root, LANTERN_DB: abs, LANTERN_LOGS: 'var/logs' }, defaultRoot);
     expect(p.db).toBe(abs);
     expect(p.logs).toBe(join(root, 'var', 'logs'));
+  });
+});
+
+describe('findProjectRoot', () => {
+  it('returns a directory containing package.json and migrations/', () => {
+    const root = findProjectRoot();
+    expect(existsSync(join(root, 'package.json'))).toBe(true);
+    expect(existsSync(join(root, 'migrations'))).toBe(true);
+  });
+
+  it('finds the project root from a start path nested inside it', () => {
+    const here = fileURLToPath(import.meta.url);
+    expect(findProjectRoot(here)).toBe(findProjectRoot());
+  });
+
+  it('throws when no package.json exists above the start path', () => {
+    const outer = mkdtempSync(join(tmpdir(), 'lantern-noroot-'));
+    const nested = join(outer, 'a', 'b', 'c');
+    mkdirSync(nested, { recursive: true });
+    expect(() => findProjectRoot(join(nested, 'file.ts'))).toThrow(
+      /could not locate the Lantern project root/,
+    );
   });
 });
