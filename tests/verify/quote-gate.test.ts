@@ -64,6 +64,46 @@ describe('decideQuote', () => {
     const junk: QuoteEvidence = { ...scholarly, url: 'not a url' };
     expect(decideQuote(QUOTE, [aggregator, junk])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
   });
+
+  it('counts a misattributed listing even with a protocol-relative url', () => {
+    const listed: QuoteEvidence = {
+      kind: 'listed-misattributed',
+      citation: 'Wikiquote: Misattributed',
+      url: '//en.wikiquote.org/wiki/Charles_Dickens#Misattributed',
+    };
+    expect(decideQuote(QUOTE, [primary(), listed])).toMatchObject({ status: 'rejected', reason: 'misattributed' });
+  });
+
+  it('counts an attribution conflict even with a relative url', () => {
+    const conflict: QuoteEvidence = {
+      kind: 'attribution-conflict',
+      citation: 'Some anthology',
+      url: '/wiki/Mark_Twain',
+      otherAuthor: 'Mark Twain',
+    };
+    expect(decideQuote(QUOTE, [scholarly, conflict])).toMatchObject({ status: 'rejected', reason: 'attribution-conflict' });
+  });
+
+  it('rejects a primary-text excerpt that does not match the quote', () => {
+    const wrongExcerpt: QuoteEvidence = { ...primary(), excerpt: 'Call me Ishmael.' };
+    expect(decideQuote(QUOTE, [wrongExcerpt])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
+  });
+
+  it('rejects a primary-text excerpt that is empty', () => {
+    const emptyExcerpt: QuoteEvidence = { ...primary(), excerpt: '' };
+    expect(decideQuote(QUOTE, [emptyExcerpt])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
+  });
+
+  it('still verifies when the primary-text excerpt differs only by typographic folding', () => {
+    const typographic: QuoteEvidence = {
+      ...primary(),
+      excerpt: '\u201cIt was the best of times\u2014it was the WORST of times',
+    };
+    const d = decideQuote(QUOTE, [typographic]);
+    expect(d.status).toBe('verified');
+    if (d.status !== 'verified') return;
+    expect(d.sources.map((s) => s.tier)).toEqual([1]);
+  });
 });
 
 describe('applyQuoteDecision', () => {

@@ -30,15 +30,25 @@ const toSource = (tier: SourceTier, e: { citation: string; url?: string; excerpt
   excerpt: e.excerpt ?? null,
 });
 
+/**
+ * Usability applies only to positive evidence (primary-text, scholarly,
+ * reference): a banned or unparseable url makes it count for nothing.
+ * Negative evidence (listed-misattributed, attribution-conflict) always
+ * counts, whatever its url, because a hard-reject signal must not be
+ * dodgeable by a relative or protocol-relative href -- exactly the shape
+ * MediaWiki output produces.
+ */
 const usable = (e: QuoteEvidence) => e.url === undefined || (hostOf(e.url) !== null && !isBannedSource(e.url));
+
+const excerptMatches = (quote: string, e: Extract<QuoteEvidence, { kind: 'primary-text' }>) =>
+  normalizeText(e.excerpt) === normalizeText(quote);
 
 export function decideQuote(quote: string, evidence: QuoteEvidence[]): QuoteDecision {
   const words = normalizeText(quote).split(' ').filter(Boolean).length;
   if (words < MIN_QUOTE_WORDS) return reject('too-short', `${words} words; minimum is ${MIN_QUOTE_WORDS}`);
 
-  const ev = evidence.filter(usable);
   const of = <K extends QuoteEvidence['kind']>(kind: K) =>
-    ev.filter((e): e is Extract<QuoteEvidence, { kind: K }> => e.kind === kind);
+    evidence.filter((e): e is Extract<QuoteEvidence, { kind: K }> => e.kind === kind);
 
   const listed = of('listed-misattributed');
   if (listed.length > 0) return reject('misattributed', listed.map((e) => e.citation).join('; '));
@@ -48,10 +58,10 @@ export function decideQuote(quote: string, evidence: QuoteEvidence[]): QuoteDeci
     return reject('attribution-conflict', conflicts.map((e) => `also attributed to ${e.otherAuthor} (${e.citation})`).join('; '));
   }
 
-  const primaries = of('primary-text');
+  const primaries = of('primary-text').filter(usable).filter((e) => excerptMatches(quote, e));
   const byAuthor = primaries.filter((e) => e.authorMatches);
-  const scholarly = of('scholarly');
-  const references = of('reference').map((e) => toSource(3, e));
+  const scholarly = of('scholarly').filter(usable);
+  const references = of('reference').filter(usable).map((e) => toSource(3, e));
 
   if (byAuthor.length > 0) {
     return {
