@@ -95,4 +95,32 @@ describe('stricter numeric tokens (review I6)', () => {
   ])('extracts %j as %j', (text, expected) => {
     expect(extractNumbers(text)).toEqual(expected);
   });
+
+  it.each([
+    ['93-billion objects', ['93 billion']],
+    ['93 - billion objects', ['93 billion']],
+    ['93bn objects', ['93bn']],
+    ['93B objects', ['93b']],
+    ['a $4.5m budget', ['4.5m']],
+    ['12k views', ['12k']],
+    ["the 1990's", ['1990s']],
+    ['the 1990\u2019s', ['1990s']],
+    ['5kg of flour', ['5']],
+    ['100km away', ['100']],
+    ["in '90s music", ['90s']],
+  ])('keeps scale and decade context for %j', (text, expected) => {
+    expect(extractNumbers(text)).toEqual(expected);
+  });
+
+  it.each([
+    ['93bn objects', ['93 objects'], ['93bn']],
+    ["the 1990's", ['in 1990'], ['1990s']],
+    ['93m tall', ['93 million'], ['93m']],
+  ])('flags the abbreviated or apostrophe form %j as unsupported by %j', (draft, excerpts, expected) => {
+    expect(unsupportedNumbers(draft, excerpts)).toEqual(expected);
+  });
+
+  it('treats a hyphenated scale word like a spaced one', () => {
+    expect(unsupportedNumbers('93-billion objects', ['93 billion objects'])).toEqual([]);
+  });
 });
