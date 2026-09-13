@@ -108,4 +108,13 @@ describe('source guards', () => {
     ).toThrow(SourcePolicyError);
     expect(count(db)).toBe(0);
   });
+
+  it('insertSource throws SourcePolicyError for a single-slash wrapped aggregator', () => {
+    const db = testDb();
+    const { itemId } = seedItem(db);
+    expect(() =>
+      insertSource(db, itemId, { tier: 2, citation: 'x', url: 'https://web.archive.org/web/2019/https:/www.brainyquote.com/x' }),
+    ).toThrow(SourcePolicyError);
+    expect(count(db)).toBe(0);
+  });
 });

@@ -49,33 +49,81 @@ const safeDecode = (value: string) => {
   }
 };
 
+/** Source URLs longer than this are refused; nothing legitimate in scope approaches it. */
+export const MAX_SOURCE_URL_LENGTH = 16_384;
+const MAX_EMBEDDED_CANDIDATES = 256;
+const AUTHORITY_WINDOW = 1024;
+const EMBEDDED_SCHEME = /^https?:[\\/]+/i;
+const AUTHORITY_END = /[\s"'<>]/;
+
+export interface HostScan {
+  hosts: string[];
+  truncated: boolean;
+}
+
 /**
- * Every http(s) host a URL refers to: its own host plus the host of any URL embedded in it,
- * such as an archive (web.archive.org/web/2019/https://...) or proxy (?u=https%3A%2F%2F...) target.
- * The text is percent-decoded up to twice, then scanned from every position where "http://" or
- * "https://" starts, so an embedded URL is never swallowed by the outer one.
+ * Every http(s) host a URL refers to: its own host plus the host of any URL embedded in it
+ * (archive or proxy targets). The text is percent-decoded up to three times, then scanned for
+ * embedded schemes written with any run of slashes or backslashes (https://, https:/, https:\\,
+ * https:\\/\\/) and for protocol-relative "//host" not already part of a scheme. Each candidate is
+ * parsed from at most AUTHORITY_WINDOW characters. A URL longer than MAX_SOURCE_URL_LENGTH, or one
+ * with more than MAX_EMBEDDED_CANDIDATES embedded candidates, is marked truncated: callers treat
+ * that as a refusal (fail closed), which also keeps the scan's cost linear.
  */
-export function hostsIn(url: string): string[] {
+export function scanHosts(url: string): HostScan {
   const hosts = new Set<string>();
   const outer = hostOf(url);
   if (outer !== null) hosts.add(outer);
-  let text = url;
-  for (let i = 0; i < 2; i++) text = safeDecode(text);
+  let truncated = url.length > MAX_SOURCE_URL_LENGTH;
+  let text = url.slice(0, MAX_SOURCE_URL_LENGTH);
+  for (let i = 0; i < 3; i++) text = safeDecode(text);
   const lower = text.toLowerCase();
-  for (let from = 0; ; ) {
-    const http = lower.indexOf('http://', from);
-    const https = lower.indexOf('https://', from);
-    const at = http === -1 ? https : https === -1 ? http : Math.min(http, https);
-    if (at === -1) break;
-    const host = hostOf(text.slice(at).split(' ')[0] ?? '');
+  let candidates = 0;
+  const consider = (candidate: string) => {
+    const host = hostOf(candidate);
     if (host !== null) hosts.add(host);
-    from = at + 1;
+  };
+
+  for (let from = 0; ; ) {
+    const at = lower.indexOf('http', from);
+    if (at === -1) break;
+    from = at + 4;
+    const scheme = EMBEDDED_SCHEME.exec(text.slice(at, at + 16));
+    if (scheme === null) continue;
+    if (candidates >= MAX_EMBEDDED_CANDIDATES) {
+      truncated = true;
+      break;
+    }
+    candidates++;
+    const name = scheme[0].slice(0, scheme[0].indexOf(':') + 1);
+    const start = at + scheme[0].length;
+    consider(`${name}//${text.slice(start, start + AUTHORITY_WINDOW).split(AUTHORITY_END)[0] ?? ''}`);
   }
-  return [...hosts];
+
+  for (let from = 0; ; ) {
+    const at = text.indexOf('//', from);
+    if (at === -1) break;
+    from = at + 2;
+    const prev = at > 0 ? text[at - 1] : '';
+    if (prev === ':' || prev === '/' || prev === '\\') continue;
+    if (candidates >= MAX_EMBEDDED_CANDIDATES) {
+      truncated = true;
+      break;
+    }
+    candidates++;
+    consider(`https://${text.slice(at + 2, at + 2 + AUTHORITY_WINDOW).split(AUTHORITY_END)[0] ?? ''}`);
+  }
+
+  return { hosts: [...hosts], truncated };
+}
+
+export function hostsIn(url: string): string[] {
+  return scanHosts(url).hosts;
 }
 
 export function isBannedSource(url: string): boolean {
-  return hostsIn(url).some((host) => BANNED_SOURCE_DOMAINS.some((d) => onDomain(host, d)));
+  const { hosts, truncated } = scanHosts(url);
+  return truncated || hosts.some((host) => BANNED_SOURCE_DOMAINS.some((d) => onDomain(host, d)));
 }
 
 export function assertSourceAllowed(src: SourceInput): void {
@@ -85,7 +133,11 @@ export function assertSourceAllowed(src: SourceInput): void {
 
   const host = hostOf(src.url);
   if (host === null) throw new SourcePolicyError(`source url is not a valid http(s) url: ${src.url}`);
-  const hosts = hostsIn(src.url);
+  if (src.url.length > MAX_SOURCE_URL_LENGTH) {
+    throw new SourcePolicyError(`source url is longer than ${MAX_SOURCE_URL_LENGTH} characters`);
+  }
+  const { hosts, truncated } = scanHosts(src.url);
+  if (truncated) throw new SourcePolicyError('source url embeds too many urls to check');
   const banned = hosts.find((h) => BANNED_SOURCE_DOMAINS.some((d) => onDomain(h, d)));
   if (banned !== undefined) throw new SourcePolicyError(`banned source domain: ${banned}`);
   if (src.tier < 3) {
