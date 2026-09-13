@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
+import { Command, CommanderError } from 'commander';
 import { config as loadDotenv } from 'dotenv';
 import { join, resolve } from 'node:path';
 import { loadConfig } from './config/load.js';
@@ -17,7 +17,10 @@ loadDotenv({ path: join(root, '.env'), quiet: true });
 const paths = resolvePaths(process.env, root);
 const log = createLogger({ dir: paths.logs });
 
-const program = new Command().name('lantern').description('Automated educational social content engine');
+const program = new Command()
+  .name('lantern')
+  .description('Automated educational social content engine')
+  .exitOverride();
 
 program
   .command('migrate')
@@ -51,6 +54,12 @@ program
   });
 
 program.parseAsync().catch((err: unknown) => {
+  if (err instanceof CommanderError) {
+    // Commander has already printed its message (unknown command, bad option, help) to the terminal.
+    if (err.exitCode !== 0) log.error('command rejected', { code: err.code, message: err.message });
+    process.exitCode = err.exitCode;
+    return;
+  }
   log.error('command failed', { err });
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
