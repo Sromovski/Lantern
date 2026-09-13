@@ -44,7 +44,7 @@ describe('cachedFetch', () => {
   it('fetches once, writes the entry, then serves it from disk', async () => {
     const { calls, fetcher } = countingFetcher();
     const req = { url: 'https://gutendex.com/books?search=dickens' };
-    const opts = { cacheDir: dir, source: 'gutendex', now: NOW };
+    const opts = { cacheDir: dir, source: 'gutendex', now: NOW, secretValues: [] };
 
     const first = await cachedFetch(req, opts, fetcher);
     expect(first).toMatchObject({ status: 200, body: '{"n":1}', fromCache: false, fetchedAt: '2026-09-13T00:00:00.000Z' });
@@ -58,7 +58,7 @@ describe('cachedFetch', () => {
   it('refresh bypasses the cached entry and overwrites it', async () => {
     const { calls, fetcher } = countingFetcher();
     const req = { url: 'https://gutendex.com/books/98' };
-    const opts = { cacheDir: dir, source: 'gutendex', now: NOW };
+    const opts = { cacheDir: dir, source: 'gutendex', now: NOW, secretValues: [] };
     await cachedFetch(req, opts, fetcher);
     expect(await cachedFetch(req, { ...opts, refresh: true }, fetcher)).toMatchObject({ body: '{"n":2}', fromCache: false });
     expect(await cachedFetch(req, opts, fetcher)).toMatchObject({ body: '{"n":2}', fromCache: true });
@@ -68,8 +68,8 @@ describe('cachedFetch', () => {
   it.each([503, 429])('never caches a %i', async (status) => {
     const { calls, fetcher } = countingFetcher({ status });
     const req = { url: 'https://example.test/flaky' };
-    await cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher);
-    await cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher);
+    await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher);
+    await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher);
     expect(calls).toHaveLength(2);
     expect(existsSync(join(dir, 'example'))).toBe(false);
   });
@@ -77,8 +77,8 @@ describe('cachedFetch', () => {
   it('caches a 404 because it is a real API answer', async () => {
     const { calls, fetcher } = countingFetcher({ status: 404, body: 'not found' });
     const req = { url: 'https://example.test/missing' };
-    await cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher);
-    expect(await cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher)).toMatchObject({
+    await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher);
+    expect(await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher)).toMatchObject({
       status: 404,
       fromCache: true,
     });
@@ -87,7 +87,7 @@ describe('cachedFetch', () => {
 
   it.each(['../escape', 'Wiki Media', '', 'a/b'])('rejects the unsafe source name %j', async (source) => {
     const { fetcher } = countingFetcher();
-    await expect(cachedFetch({ url: 'https://example.test/' }, { cacheDir: dir, source }, fetcher)).rejects.toThrow(
+    await expect(cachedFetch({ url: 'https://example.test/' }, { cacheDir: dir, source, secretValues: [] }, fetcher)).rejects.toThrow(
       /invalid cache source name/,
     );
   });
@@ -98,7 +98,7 @@ describe('cachedFetch', () => {
     });
     await cachedFetch(
       { url: 'https://user:secret-pw@api.example.test/items?api_key=secret-abc&q=dickens&access_token=secret-zzz', method: 'POST', body: 'password=secret-hunter2' },
-      { cacheDir: dir, source: 'example', now: NOW, allowNonGet: true },
+      { cacheDir: dir, source: 'example', now: NOW, allowNonGet: true, secretValues: [] },
       fetcher,
     );
     const [file] = readdirSync(join(dir, 'example'));
@@ -119,7 +119,7 @@ describe('cachedFetch', () => {
         'www-authenticate': 'Bearer leak-realm',
       },
     });
-    await cachedFetch({ url: 'https://example.test/h' }, { cacheDir: dir, source: 'example', now: NOW }, fetcher);
+    await cachedFetch({ url: 'https://example.test/h' }, { cacheDir: dir, source: 'example', now: NOW, secretValues: [] }, fetcher);
     const [file] = readdirSync(join(dir, 'example'));
     const stored = JSON.parse(readFileSync(join(dir, 'example', file!), 'utf8'));
     expect(Object.keys(stored.headers).sort()).toEqual(['content-type', 'etag']);
@@ -129,16 +129,16 @@ describe('cachedFetch', () => {
   it('refuses to cache a response body that echoes a redacted credential, but still returns it', async () => {
     const req = { url: 'https://api.example.test/items?api_key=leak-echo-12345&q=dickens' };
     const { calls, fetcher } = countingFetcher({ body: '{"request":"/items?api_key=leak-echo-12345"}' });
-    const first = await cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher);
+    const first = await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher);
     expect(first).toMatchObject({ status: 200, fromCache: false });
     expect(existsSync(join(dir, 'example'))).toBe(false);
-    await cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher);
+    await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher);
     expect(calls).toHaveLength(2);
   });
 
   it('stores pretty, LF-terminated JSON', async () => {
     const { fetcher } = countingFetcher();
-    await cachedFetch({ url: 'https://gutendex.com/books/1400' }, { cacheDir: dir, source: 'gutendex', now: NOW }, fetcher);
+    await cachedFetch({ url: 'https://gutendex.com/books/1400' }, { cacheDir: dir, source: 'gutendex', now: NOW, secretValues: [] }, fetcher);
     const [file] = readdirSync(join(dir, 'gutendex'));
     const text = readFileSync(join(dir, 'gutendex', file!), 'utf8');
     expect(text.endsWith('}\n')).toBe(true);
@@ -162,7 +162,7 @@ describe('cachedFetch', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const fetcher = (r: HttpRequest) => fetchWithRetry(r, { userAgent: UA, sleep: async () => {} });
-    const opts = { cacheDir: dir, source: 'local-test', now: NOW };
+    const opts = { cacheDir: dir, source: 'local-test', now: NOW, secretValues: [] };
 
     await cachedFetch({ url: `${base}/books` }, opts, fetcher);
     expect(await cachedFetch({ url: `${base}/books` }, opts, fetcher)).toMatchObject({ fromCache: true, body: '{"results":[]}' });
@@ -254,7 +254,7 @@ describe('cachedFetch', () => {
   it('refuses non-GET requests unless allowNonGet is set', async () => {
     const { fetcher } = countingFetcher();
     await expect(
-      cachedFetch({ url: 'https://example.test/', method: 'POST', body: 'x=1' }, { cacheDir: dir, source: 'example' }, fetcher),
+      cachedFetch({ url: 'https://example.test/', method: 'POST', body: 'x=1' }, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher),
     ).rejects.toThrow(/GET requests only/);
   });
 
@@ -266,7 +266,35 @@ describe('cachedFetch', () => {
     mkdirSync(join(dir, 'example'), { recursive: true });
     writeFileSync(join(dir, 'example', `${cacheKey(req)}.json`), content);
     const { fetcher } = countingFetcher();
-    await expect(cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher)).rejects.toThrow(CacheCorruptError);
+    await expect(
+      cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher),
+    ).rejects.toThrow(CacheCorruptError);
+  });
+
+  it('stores a redacted finalUrl and returns it on a cache hit', async () => {
+    const { fetcher } = countingFetcher({ finalUrl: 'https://mirror.example.test/books/98?api_key=leak-final-url-key' });
+    const req = { url: 'https://gutendex.example.test/books/98' };
+    const opts = { cacheDir: dir, source: 'gutendex', now: NOW, secretValues: [] };
+    const fresh = await cachedFetch(req, opts, fetcher);
+    expect(fresh.finalUrl).toBe('https://mirror.example.test/books/98?api_key=leak-final-url-key');
+    const hit = await cachedFetch(req, opts, fetcher);
+    expect(hit).toMatchObject({ fromCache: true, finalUrl: 'https://mirror.example.test/books/98?api_key=REDACTED' });
+    const [file] = readdirSync(join(dir, 'gutendex'));
+    expect(readFileSync(join(dir, 'gutendex', file!), 'utf8')).not.toMatch(/leak-/);
+  });
+
+  it('reads an entry written before finalUrl existed', async () => {
+    const req = { url: 'https://example.test/legacy' };
+    mkdirSync(join(dir, 'example'), { recursive: true });
+    writeFileSync(
+      join(dir, 'example', `${cacheKey(req)}.json`),
+      `${JSON.stringify({ request: { method: 'GET', url: req.url }, url: req.url, status: 200, headers: {}, body: 'old', fetchedAt: '2026-01-01T00:00:00.000Z' }, null, 2)}\n`,
+    );
+    const { calls, fetcher } = countingFetcher();
+    const hit = await cachedFetch(req, { cacheDir: dir, source: 'example', secretValues: [] }, fetcher);
+    expect(hit).toMatchObject({ fromCache: true, body: 'old' });
+    expect(hit.finalUrl).toBeUndefined();
+    expect(calls).toHaveLength(0);
   });
 });
 

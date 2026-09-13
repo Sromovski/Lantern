@@ -7,6 +7,8 @@ export interface HttpRequest {
 
 export interface HttpResult {
   url: string;
+  /** The URL after redirects (response.url), or the request URL when the response does not report one. */
+  finalUrl?: string;
   status: number;
   headers: Record<string, string>;
   body: string;
@@ -17,6 +19,8 @@ export interface HttpOptions {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  /** Per-attempt timeout covering the request and the body read. Defaults to 60 000 ms. */
+  timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -68,7 +72,7 @@ export function unsupportedBodyReason(contentType: string | null): string | null
   return null;
 }
 
-const DEFAULTS = { maxAttempts: 4, baseDelayMs: 500, maxDelayMs: 30_000 } as const;
+const DEFAULTS = { maxAttempts: 4, baseDelayMs: 500, maxDelayMs: 30_000, timeoutMs: 60_000 } as const;
 
 export function buildUserAgent(contact: string | undefined, version: string): string {
   const trimmed = contact?.trim();
@@ -118,6 +122,12 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
   if (!opts.userAgent.trim()) {
     throw new TypeError('userAgent must be a non-empty contact User-Agent (see buildUserAgent)');
   }
+  const timeoutMs = opts.timeoutMs ?? DEFAULTS.timeoutMs;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError(`timeoutMs must be a positive finite number, got ${timeoutMs}`);
+  }
+  const headers = new Headers(req.headers);
+  headers.set('user-agent', opts.userAgent);
   const delays = {
     baseDelayMs: opts.baseDelayMs ?? DEFAULTS.baseDelayMs,
     maxDelayMs: opts.maxDelayMs ?? DEFAULTS.maxDelayMs,
@@ -131,9 +141,12 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
     let res: Response;
     let body: string;
     try {
-      const headers = new Headers(req.headers);
-      headers.set('user-agent', opts.userAgent);
-      res = await fetchImpl(req.url, { method: req.method ?? 'GET', headers, body: req.body });
+      res = await fetchImpl(req.url, {
+        method: req.method ?? 'GET',
+        headers,
+        body: req.body,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
       const reason = unsupportedBodyReason(res.headers.get('content-type'));
       if (reason !== null) {
         await res.body?.cancel().catch(() => {});
@@ -148,6 +161,7 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
     }
     const result: HttpResult = {
       url: req.url,
+      finalUrl: res.url || req.url,
       status: res.status,
       headers: Object.fromEntries(res.headers.entries()),
       body,

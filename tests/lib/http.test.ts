@@ -253,6 +253,94 @@ describe('fetchWithRetry', () => {
       expect(await fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep })).toMatchObject({ status: 200, body: 'ok' });
     },
   );
+
+  it('times out a server that never responds, retries, then throws HttpError with a TimeoutError cause', async () => {
+    const server = createServer(() => {});
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const { sleep, calls } = recordingSleep();
+    const err = await fetchWithRetry({ url: base }, { userAgent: UA, sleep, maxAttempts: 2, timeoutMs: 100 }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ attempts: 2 });
+    expect((err as HttpError).cause).toMatchObject({ name: 'TimeoutError' });
+    expect(calls).toEqual([500]);
+  });
+
+  it('times out a body that stalls after the headers', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '100' });
+      res.write('partial');
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const { sleep } = recordingSleep();
+    const err = await fetchWithRetry({ url: base }, { userAgent: UA, sleep, maxAttempts: 1, timeoutMs: 100 }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).cause).toMatchObject({ name: 'TimeoutError' });
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])('rejects timeoutMs %s without making a request', async (timeoutMs) => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      throw new Error('unreachable');
+    }) as unknown as typeof fetch;
+    await expect(
+      fetchWithRetry({ url: 'http://127.0.0.1:1/' }, { userAgent: UA, fetchImpl, timeoutMs }),
+    ).rejects.toThrow(RangeError);
+    expect(called).toBe(false);
+  });
+
+  it('rejects an invalid header name immediately, without retrying or making a request', async () => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      throw new Error('unreachable');
+    }) as unknown as typeof fetch;
+    const { sleep, calls } = recordingSleep();
+    await expect(
+      fetchWithRetry({ url: 'http://127.0.0.1:1/', headers: { 'bad header': 'x' } }, { userAgent: UA, sleep, fetchImpl }),
+    ).rejects.toThrow(TypeError);
+    expect(called).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it('reports the post-redirect URL as finalUrl', async () => {
+    const server = createServer((req, res) => {
+      if (req.url === '/redir') {
+        res.writeHead(302, { location: '/final' });
+        res.end();
+      } else {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('final body');
+      }
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const { sleep } = recordingSleep();
+    const res = await fetchWithRetry({ url: `${base}/redir` }, { userAgent: UA, sleep });
+    expect(res).toMatchObject({ url: `${base}/redir`, finalUrl: `${base}/final`, body: 'final body' });
+  });
+
+  it('sets finalUrl to the request URL when there is no redirect', async () => {
+    const srv = await scriptedServer([{ status: 200, body: 'ok' }]);
+    const { sleep } = recordingSleep();
+    const res = await fetchWithRetry({ url: `${srv.base}/plain` }, { userAgent: UA, sleep });
+    expect(res.finalUrl).toBe(`${srv.base}/plain`);
+  });
+
+  it('falls back to the request URL when the response carries no url', async () => {
+    const fetchImpl = (async () => new Response('ok', { status: 200 })) as unknown as typeof fetch;
+    const res = await fetchWithRetry({ url: 'http://127.0.0.1:1/x' }, { userAgent: UA, fetchImpl });
+    expect(res.finalUrl).toBe('http://127.0.0.1:1/x');
+  });
 });
 
 describe('retryDelayMs', () => {

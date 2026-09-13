@@ -24,6 +24,7 @@ export interface CachedResult extends HttpResult {
 interface StoredEntry {
   request: { method: string; url: string; bodySha256?: string };
   url: string;
+  finalUrl?: string;
   status: number;
   headers: Record<string, string>;
   body: string;
@@ -139,6 +140,7 @@ function readEntry(path: string): StoredEntry {
     typeof e.status !== 'number' ||
     typeof e.body !== 'string' ||
     typeof e.fetchedAt !== 'string' ||
+    (e.finalUrl !== undefined && typeof e.finalUrl !== 'string') ||
     typeof e.headers !== 'object' ||
     e.headers === null
   ) {
@@ -165,6 +167,7 @@ export async function cachedFetch(
     const stored = readEntry(path);
     return {
       url: req.url,
+      ...(stored.finalUrl !== undefined ? { finalUrl: stored.finalUrl } : {}),
       status: stored.status,
       headers: stored.headers,
       body: stored.body,
@@ -184,6 +187,7 @@ export async function cachedFetch(
         ...(req.body !== undefined ? { bodySha256: sha256(req.body) } : {}),
       },
       url: redactUrl(result.url),
+      ...(result.finalUrl !== undefined ? { finalUrl: redactUrl(result.finalUrl) } : {}),
       status: result.status,
       headers: Object.fromEntries(
         Object.entries(result.headers).filter(([name]) => STORED_HEADERS.has(name.toLowerCase())),
@@ -194,7 +198,7 @@ export async function cachedFetch(
     const serialized = `${JSON.stringify(entry, null, 2)}\n`;
     // Scan the raw stored fields as well as the serialized text: JSON serialization double-escapes
     // backslashes and quotes, so an echo such as `leak\/value` in a body is not a substring of `serialized`.
-    const haystack = [serialized, entry.request.url, entry.url, ...Object.values(entry.headers), entry.body].join('\n');
+    const haystack = [serialized, entry.request.url, entry.url, entry.finalUrl ?? '', ...Object.values(entry.headers), entry.body].join('\n');
     const secrets = [...redactWithSecrets(req.url).secrets, ...(cache.secretValues ?? secretEnvValues(process.env))];
     const leaks = secrets.some((secret) => encodedForms(secret).some((form) => haystack.includes(form)));
     if (!leaks) {
