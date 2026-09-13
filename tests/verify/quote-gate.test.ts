@@ -130,6 +130,11 @@ describe('decideQuote', () => {
     expect(decideQuote(QUOTE, [archived])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
   });
 
+  it('ignores primary-text evidence outside the public-domain full-text hosts even when the excerpt matches', () => {
+    const elsewhere = { ...primary(), url: 'https://www.example.edu/dickens/a-tale-of-two-cities.txt' };
+    expect(decideQuote(QUOTE, [elsewhere])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
+  });
+
   it('keeps a valid primary source when a companion scholarly source is invalid', () => {
     const d = decideQuote(QUOTE, [primary(), { ...scholarly, url: 'https://en.wikipedia.org/wiki/A_Tale_of_Two_Cities' }]);
     expect(d.status).toBe('verified');

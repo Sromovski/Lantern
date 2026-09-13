@@ -5,7 +5,7 @@ import { seedItem, testDb } from '../helpers/db.js';
 const NOW = '2026-01-01T00:00:00.000Z';
 
 function verifyWithTier1(db: ReturnType<typeof testDb>, itemId: number): number {
-  const sourceId = insertSource(db, itemId, { tier: 1, citation: 'A Tale of Two Cities, Book 1, Ch. 1' });
+  const sourceId = insertSource(db, itemId, { tier: 1, url: 'https://www.gutenberg.org/ebooks/98', citation: 'A Tale of Two Cities, Book 1, Ch. 1' });
   db.prepare("UPDATE items SET status = 'verified' WHERE id = ?").run(itemId);
   return sourceId;
 }

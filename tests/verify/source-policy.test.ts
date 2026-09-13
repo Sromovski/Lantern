@@ -117,9 +117,29 @@ describe('scanHosts', () => {
 describe('assertSourceAllowed', () => {
   const ok = { tier: 1 as const, citation: 'Dickens, A Tale of Two Cities (1859), Book 1, Ch. 1' };
 
-  it('accepts a primary source with or without a url', () => {
-    expect(() => assertSourceAllowed(ok)).not.toThrow();
+  it('accepts a primary source only with the url of its public-domain full text', () => {
+    expect(() => assertSourceAllowed(ok)).toThrow(/tier 1 source needs the url/);
     expect(() => assertSourceAllowed({ ...ok, url: 'https://www.gutenberg.org/ebooks/98' })).not.toThrow();
+  });
+
+  it.each([
+    'https://www.gutenberg.org/cache/epub/98/pg98.txt',
+    'https://gutenberg.org/ebooks/98.txt.utf-8',
+    'https://standardebooks.org/ebooks/charles-dickens/bleak-house/text/single-page',
+    'https://en.wikisource.org/w/index.php?title=Page:Bleak_House.djvu/15',
+  ])('accepts the public-domain full text %s at tier 1', (url) => {
+    expect(() => assertSourceAllowed({ ...ok, url })).not.toThrow();
+  });
+
+  it.each([
+    'https://gutenberg.pglaf.org/9/98/98-h/98-h.htm',
+    'https://web.archive.org/web/2019id_/https://www.gutenberg.org/files/98/98-h/98-h.htm',
+    'https://login.ezproxy.example.edu/login?url=https://www.jstor.org/stable/123',
+    'https://notgutenberg.org/ebooks/98',
+    'https://gutenberg.org.evil.test/ebooks/98',
+  ])('refuses %s at tier 1 but allows it at tier 2', (url) => {
+    expect(() => assertSourceAllowed({ ...ok, url })).toThrow(/tier 1 needs a public-domain full text/);
+    expect(() => assertSourceAllowed({ ...ok, tier: 2, url })).not.toThrow();
   });
 
   it('rejects banned domains', () => {
@@ -217,8 +237,12 @@ describe('assertSourceAllowed', () => {
       }
     }
 
-    for (const url of cleanUrls) {
+    for (const url of cleanUrls.slice(0, 2)) {
       expect(() => insertSource(db, itemId, { tier: 1, url, citation: 'c' })).not.toThrow();
+    }
+    for (const url of cleanUrls.slice(2)) {
+      expect(() => insertSource(db, itemId, { tier: 1, url, citation: 'c' })).toThrow(SourcePolicyError);
+      expect(() => insertSource(db, itemId, { tier: 2, url, citation: 'c' })).not.toThrow();
     }
   });
 });

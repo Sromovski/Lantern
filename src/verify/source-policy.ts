@@ -16,6 +16,9 @@ export const BANNED_SOURCE_DOMAINS = [
 /** Useful leads, never verification on their own (spec §8). Capped at tier 3. */
 export const REFERENCE_DOMAINS = ['wikiquote.org', 'wikipedia.org'] as const;
 
+/** Public-domain full-text hosts (spec section 8): the only places a tier 1 source may live. */
+export const PRIMARY_TEXT_DOMAINS = ['gutenberg.org', 'standardebooks.org', 'wikisource.org'] as const;
+
 export type SourceTier = 1 | 2 | 3;
 
 export interface SourceInput {
@@ -154,7 +157,12 @@ export function isBannedSource(url: string): boolean {
 export function assertSourceAllowed(src: SourceInput): void {
   if (src.citation.trim().length === 0) throw new SourcePolicyError('source citation must not be empty');
   if (![1, 2, 3].includes(src.tier)) throw new SourcePolicyError(`invalid source tier ${src.tier}`);
-  if (src.url == null) return;
+  if (src.url == null) {
+    if (src.tier === 1) {
+      throw new SourcePolicyError(`a tier 1 source needs the url of its full text on ${PRIMARY_TEXT_DOMAINS.join(', ')}`);
+    }
+    return;
+  }
 
   const host = hostOf(src.url);
   if (host === null) throw new SourcePolicyError(`source url is not a valid http(s) url: ${src.url}`);
@@ -169,6 +177,14 @@ export function assertSourceAllowed(src: SourceInput): void {
     const reference = hosts.find((h) => REFERENCE_DOMAINS.some((d) => onDomain(h, d))) ?? mentionedDomain(src.url, REFERENCE_DOMAINS);
     if (reference !== undefined) {
       throw new SourcePolicyError(`${reference} is a reference source and cannot be tier ${src.tier}`);
+    }
+  }
+  if (src.tier === 1) {
+    const outside = hosts.find((h) => !PRIMARY_TEXT_DOMAINS.some((d) => onDomain(h, d)));
+    if (outside !== undefined) {
+      throw new SourcePolicyError(
+        `tier 1 needs a public-domain full text on ${PRIMARY_TEXT_DOMAINS.join(', ')}, not ${outside}`,
+      );
     }
   }
 }
