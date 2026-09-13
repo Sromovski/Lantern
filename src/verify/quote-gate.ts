@@ -5,7 +5,7 @@ export const MIN_QUOTE_WORDS = 5;
 
 export type QuoteEvidence =
   | { kind: 'primary-text'; citation: string; url?: string; excerpt: string; authorMatches: boolean }
-  | { kind: 'scholarly'; citation: string; url?: string; excerpt?: string }
+  | { kind: 'scholarly'; citation: string; url?: string; excerpt?: string; authorMatches: boolean }
   | { kind: 'reference'; citation: string; url?: string; excerpt?: string }
   | { kind: 'listed-misattributed'; citation: string; url?: string }
   | { kind: 'attribution-conflict'; citation: string; url?: string; otherAuthor: string };
@@ -72,19 +72,23 @@ export function decideQuote(quote: string, evidence: QuoteEvidence[]): QuoteDeci
   const primaries = of('primary-text').filter(usableAs(1)).filter((e) => excerptMatches(quote, e));
   const byAuthor = primaries.filter((e) => e.authorMatches);
   const scholarly = of('scholarly').filter(usableAs(2));
+  const scholarlyByAuthor = scholarly.filter((e) => e.authorMatches);
   const references = of('reference').filter(usableAs(3)).map((e) => toSource(3, e));
 
   if (byAuthor.length > 0) {
     return {
       status: 'verified',
-      sources: [...byAuthor.map((e) => toSource(1, e)), ...scholarly.map((e) => toSource(2, e)), ...references],
+      sources: [...byAuthor.map((e) => toSource(1, e)), ...scholarlyByAuthor.map((e) => toSource(2, e)), ...references],
     };
   }
   if (primaries.length > 0) {
     return reject('author-mismatch', `found only in works not by the attributed author: ${primaries.map((e) => e.citation).join('; ')}`);
   }
+  if (scholarlyByAuthor.length > 0) {
+    return { status: 'verified', sources: [...scholarlyByAuthor.map((e) => toSource(2, e)), ...references] };
+  }
   if (scholarly.length > 0) {
-    return { status: 'verified', sources: [...scholarly.map((e) => toSource(2, e)), ...references] };
+    return reject('author-mismatch', `attested only for a different author: ${scholarly.map((e) => e.citation).join('; ')}`);
   }
   return reject('insufficient-evidence', references.length > 0 ? 'reference sources only' : 'no usable evidence');
 }

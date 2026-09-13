@@ -21,7 +21,16 @@ const primary = (authorMatches = true): QuoteEvidence => ({
   excerpt: 'It was the best of times, it was the worst of times',
   authorMatches,
 });
-const scholarly: QuoteEvidence = { kind: 'scholarly', citation: 'Oxford World\'s Classics edition, p. 5' };
+const scholarly: QuoteEvidence = {
+  kind: 'scholarly',
+  citation: 'Oxford World\'s Classics edition, p. 5',
+  authorMatches: true,
+};
+const scholarlyOtherAuthor: QuoteEvidence = {
+  kind: 'scholarly',
+  citation: 'An anthology attributing the line to Thomas Carlyle',
+  authorMatches: false,
+};
 const wikiquote: QuoteEvidence = {
   kind: 'reference',
   citation: 'Wikiquote: Charles Dickens',
@@ -60,6 +69,17 @@ describe('decideQuote', () => {
   it('verifies on scholarly evidence as tier 2', () => {
     const d = decideQuote(QUOTE, [scholarly]);
     expect(d.status === 'verified' && d.sources.map((s) => s.tier)).toEqual([2]);
+  });
+
+  it('rejects a quote that a scholarly source attributes only to a different author', () => {
+    expect(decideQuote(QUOTE, [scholarlyOtherAuthor])).toMatchObject({ status: 'rejected', reason: 'author-mismatch' });
+  });
+
+  it('does not attach a scholarly source for a different author to a verified quote', () => {
+    const d = decideQuote(QUOTE, [primary(), scholarlyOtherAuthor]);
+    expect(d.status).toBe('verified');
+    if (d.status !== 'verified') return;
+    expect(d.sources.map((s) => s.tier)).toEqual([1]);
   });
 
   it('never verifies on reference sources alone', () => {
