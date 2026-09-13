@@ -182,7 +182,7 @@ lantern/
     schedule/           # queue selection, cadence, spacing
     review/             # local web UI for the review queue
     doctor/             # health checks (lantern doctor)
-    lib/                # logging, run_log stage wrapper, paths, http client + response cache
+    lib/                # logging, run_log stage wrapper, paths, http client + response cache + streaming download
   tests/
   logs/
 ```
@@ -462,8 +462,9 @@ thumbnail.
 
 **`lantern doctor`**
 Health check per channel: token validity and days-to-expiry, quota headroom, DB
-integrity, queue depth, last successful publish, disk usage. Run it daily; it is
-how you find out a token expired *before* a page goes quiet for a week.
+integrity (including missing guard triggers and migration files edited after they
+were applied), queue depth, last successful publish, disk usage. Run it daily; it
+is how you find out a token expired *before* a page goes quiet for a week.
 
 Every stage writes a `run_log` row on entry and exit — stage, vertical, channel,
 ok/failed, and a JSON detail blob. That table is what `doctor` reads and what
@@ -491,7 +492,7 @@ Quote aggregator sites (BrainyQuote, Goodreads quotes, AZQuotes and friends) are
 launder each other's errors. They may not appear in `sources` at all. This ban,
 and the rule that every verified item needs at least one tier 1 or tier 2
 source, are enforced in TypeScript (`assertSourceAllowed` / `insertSource` /
-`applyQuoteDecision`, which are authoritative), backed by SQLite triggers in
+`verifyQuoteItem`, which are authoritative), backed by SQLite triggers in
 migrations 002-004 as a best-effort backstop for writes that bypass that code.
 
 Additional hard rejects: quotes attributed to an author who died before the
@@ -718,10 +719,12 @@ hand.
 ### Rate limiting & retries
 
 Respect each platform's headers. Exponential backoff on 5xx and rate limits.
-Never retry a 4xx that is not a rate limit — fix it instead. Every attempt
-increments `publications.attempt`; the `UNIQUE(post_id, channel_id)` constraint
-plus `idempotency_key` make a duplicate post structurally impossible even if a
-retry races.
+Never retry a 4xx that is not a rate limit — fix it instead. A POST is sent
+once: after a network error, timeout or 5xx it is not retried, because the
+platform may already have acted on it; only a 429 is retried, unless the adapter
+opts in with an idempotency key. Every attempt increments `publications.attempt`;
+the `UNIQUE(post_id, channel_id)` constraint plus `idempotency_key` make a
+duplicate post structurally impossible even if a retry races.
 
 ## 12. Scheduling
 

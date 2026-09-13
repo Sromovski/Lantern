@@ -2691,6 +2691,8 @@ git commit -m "feat(verify): programmatic numeric claim check"
 
 ### Prerequisites carried from the Phase 1 final review
 
+> **Status:** the **I4** row (foreign-key-safe migration runner and the doctor guard-trigger check; a future rebuild of `items` or `sources` must still recreate the 002-004 triggers in the same migration), **Unknown-command logging** and **Migration drift** rows are done on branch `phase-2-prerequisites` (docs/plans/phase-2-prerequisites.md, Tasks Q5-Q7).
+
 The whole-branch review of Part A found issues that are real but out of scope for
 that fix wave. They are not forgotten — they must land before the milestone named
 below, not later.
@@ -2710,6 +2712,8 @@ below, not later.
 > **Status:** the **Normalization hardening + golden hash** and **Large-text performance** rows are done on branch `phase-2-foundations` (docs/plans/phase-2-foundations.md, Tasks F1–F2).
 
 > **Status:** the **Stricter numbers**, **Total gate and typed apply errors**, **Archive-wrapped aggregator URLs**, **Request timeout / `AbortSignal`**, **Fail fast on invalid caller headers** and **Final URL after redirects** rows are done on branch `phase-2-hardening` (docs/plans/phase-2-hardening.md, Tasks H1–H4). Two rows landed differently from their text: the total gate treats a policy-refused source as unusable evidence (the decision becomes insufficient-evidence) instead of rejecting with a source-policy reason, and archive-wrapped URLs are caught by a bounded host scan plus a decoded substring check that mirrors the migration 002 trigger.
+
+> **Status:** the **Apply takes evidence, not a decision**, **Binary downloads** and **Cache write robustness and key canonicalization** rows are done on branch `phase-2-prerequisites` (Tasks Q2-Q4). The retry half of **Unsafe-method retries and upload timeouts** is done (Task Q1); separate connect/idle timeouts for long uploads remain for Phase 8.
 
 The whole-branch review of Part B found issues that are real but out of scope for
 the F1–F7 fix wave. They are not forgotten — they must land before the milestone
@@ -2767,7 +2771,7 @@ Every milestone below follows the same opening ritual:
 - Optional lead generator: sourced Wikiquote entries become `raw` items with `reference` evidence, and they still need Tier 1/2 to verify.
 
 **2.3 `lantern harvest` and `lantern verify` commands**
-- Both wrapped in `runStage`. Verify gathers evidence (2.1, 2.2), calls `decideQuote`, then `applyQuoteDecision`.
+- Both wrapped in `runStage`. Verify gathers evidence (2.1, 2.2), calls `verifyQuoteItem`, which runs `decideQuote` against the stored body inside the write transaction.
 - Rejections are kept. Add `lantern verify --retry-insufficient` to re-open only `insufficient-evidence` rejects after new evidence sources are added. Every other reject reason stays final.
 
 **2.4 Enrichment and fact-check** — `src/enrich/`, `prompts/`
