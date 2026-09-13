@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { copyFileSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openDb } from '../../src/db/connection.js';
-import { expectedTriggers, migrate, pendingMigrations, MIGRATIONS_DIR } from '../../src/db/migrate.js';
+import { openDb, type Db } from '../../src/db/connection.js';
+import { expectedTriggers, migrate, migrationDrift, pendingMigrations, MIGRATIONS_DIR } from '../../src/db/migrate.js';
 import { testDb, seedPublicationChain } from '../helpers/db.js';
 
 function tempMigrationsDir(files: Record<string, string>): string {
@@ -152,5 +152,51 @@ describe('migrate', () => {
     const db = openDb(':memory:');
     migrate(db, dir);
     expect(expectedTriggers(db, dir)).toEqual(['t_b', 't_c']);
+  });
+
+  it('records a line-ending-independent checksum for each applied migration', () => {
+    const lf = tempMigrationsDir({ '001_t.sql': 'CREATE TABLE t (id INTEGER PRIMARY KEY);\nCREATE TABLE u (id INTEGER PRIMARY KEY);\n' });
+    const crlf = tempMigrationsDir({
+      '001_t.sql': 'CREATE TABLE t (id INTEGER PRIMARY KEY);\r\nCREATE TABLE u (id INTEGER PRIMARY KEY);\r\n',
+    });
+    const a = openDb(':memory:');
+    migrate(a, lf);
+    const b = openDb(':memory:');
+    migrate(b, crlf);
+    const checksumOf = (db: Db) => db.prepare('SELECT checksum FROM schema_migrations').pluck().get();
+    expect(checksumOf(a)).toMatch(/^[0-9a-f]{64}$/);
+    expect(checksumOf(a)).toBe(checksumOf(b));
+  });
+
+  it('backfills checksums on a database migrated before checksums existed', () => {
+    const dir = tempMigrationsDir({
+      '001_t.sql': 'CREATE TABLE t (id INTEGER PRIMARY KEY);',
+      '002_u.sql': 'CREATE TABLE u (id INTEGER PRIMARY KEY);',
+    });
+    const db = openDb(':memory:');
+    db.exec('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL); CREATE TABLE t (id INTEGER PRIMARY KEY);');
+    db.prepare("INSERT INTO schema_migrations VALUES ('001_t.sql', '2026-01-01T00:00:00.000Z')").run();
+    expect(migrationDrift(db, dir).unrecorded).toEqual(['001_t.sql']);
+    expect(migrate(db, dir).applied).toEqual(['002_u.sql']);
+    expect(migrationDrift(db, dir)).toEqual({ edited: [], unknown: [], unrecorded: [] });
+  });
+
+  it('reports a migration file edited after it was applied', () => {
+    const dir = tempMigrationsDir({ '001_t.sql': 'CREATE TABLE t (id INTEGER PRIMARY KEY);' });
+    const db = openDb(':memory:');
+    migrate(db, dir);
+    writeFileSync(join(dir, '001_t.sql'), 'CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);');
+    expect(migrationDrift(db, dir)).toEqual({ edited: ['001_t.sql'], unknown: [], unrecorded: [] });
+  });
+
+  it('reports an applied migration that is missing from the directory', () => {
+    const dir = tempMigrationsDir({
+      '001_t.sql': 'CREATE TABLE t (id INTEGER PRIMARY KEY);',
+      '002_u.sql': 'CREATE TABLE u (id INTEGER PRIMARY KEY);',
+    });
+    const db = openDb(':memory:');
+    migrate(db, dir);
+    rmSync(join(dir, '002_u.sql'));
+    expect(migrationDrift(db, dir)).toEqual({ edited: [], unknown: ['002_u.sql'], unrecorded: [] });
   });
 });

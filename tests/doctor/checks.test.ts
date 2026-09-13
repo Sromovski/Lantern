@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from '../../src/db/connection.js';
@@ -89,6 +89,22 @@ describe('runChecks', () => {
     const r = byName(ctx, 'db.triggers');
     expect(r).toMatchObject({ status: 'fail' });
     expect(r?.detail).toContain('items_verified_not_reopened');
+  });
+
+  it('fails when an applied migration file was edited afterwards', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lantern-migrations-'));
+    cpSync(MIGRATIONS_DIR, dir, { recursive: true });
+    const ctx = healthyCtx({ migrationsDir: dir });
+    appendFileSync(join(dir, '004_item_guards.sql'), '\n-- edited after being applied\n');
+    const r = byName(ctx, 'db.drift');
+    expect(r).toMatchObject({ status: 'fail' });
+    expect(r?.detail).toContain('004_item_guards.sql');
+  });
+
+  it('warns when applied migrations have no recorded checksum', () => {
+    const ctx = healthyCtx();
+    ctx.db.prepare('UPDATE schema_migrations SET checksum = NULL').run();
+    expect(byName(ctx, 'db.drift')).toMatchObject({ status: 'warn' });
   });
 });
 

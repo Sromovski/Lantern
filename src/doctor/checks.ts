@@ -1,7 +1,7 @@
 import { statfsSync } from 'node:fs';
 import { ConfigError, loadConfig, type LanternConfig, type LoadedChannel } from '../config/load.js';
 import type { Db } from '../db/connection.js';
-import { expectedTriggers, pendingMigrations } from '../db/migrate.js';
+import { expectedTriggers, migrationDrift, pendingMigrations } from '../db/migrate.js';
 import { findChannelId } from '../db/sync.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
@@ -96,6 +96,21 @@ export function runChecks(ctx: DoctorContext): CheckResult[] {
         ? result('db.triggers', 'ok', `${present.size} triggers present`)
         : result('db.triggers', 'fail', `missing guard triggers: ${missing.join(', ')}; the schema was changed outside lantern migrate`),
     );
+  }
+
+  if (pending !== undefined) {
+    const drift = migrationDrift(db, ctx.migrationsDir);
+    if (drift.edited.length > 0 || drift.unknown.length > 0) {
+      const parts = [
+        ...(drift.edited.length > 0 ? [`edited after being applied: ${drift.edited.join(', ')}`] : []),
+        ...(drift.unknown.length > 0 ? [`applied but not in migrations/: ${drift.unknown.join(', ')}`] : []),
+      ];
+      out.push(result('db.drift', 'fail', parts.join('; ')));
+    } else if (drift.unrecorded.length > 0) {
+      out.push(result('db.drift', 'warn', `no checksum recorded for ${drift.unrecorded.join(', ')}; run lantern migrate to record them`));
+    } else {
+      out.push(result('db.drift', 'ok', 'applied migrations match their files'));
+    }
   }
 
   let config: LanternConfig | undefined;
