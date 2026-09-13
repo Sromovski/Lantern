@@ -7,6 +7,10 @@ describe('hostOf', () => {
     expect(hostOf('ftp://example.com/x')).toBeNull();
     expect(hostOf('not a url')).toBeNull();
   });
+
+  it('strips a trailing dot from the FQDN', () => {
+    expect(hostOf('https://www.gutenberg.org./ebooks/98')).toBe('www.gutenberg.org');
+  });
 });
 
 describe('isBannedSource', () => {
@@ -23,6 +27,10 @@ describe('isBannedSource', () => {
     'https://en.wikisource.org/wiki/A_Tale_of_Two_Cities',
     'https://standardebooks.org/ebooks/charles-dickens/bleak-house',
   ])('allows %s', (url) => expect(isBannedSource(url)).toBe(false));
+
+  it('bans a trailing-dot FQDN of a banned domain', () => {
+    expect(isBannedSource('https://www.brainyquote.com./x')).toBe(true);
+  });
 });
 
 describe('assertSourceAllowed', () => {

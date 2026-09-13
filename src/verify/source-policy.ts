@@ -34,7 +34,8 @@ const onDomain = (host: string, domain: string) => host === domain || host.endsW
 export function hostOf(url: string): string | null {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.hostname.toLowerCase() : null;
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.hostname.toLowerCase().replace(/\.+$/, '');
   } catch {
     return null;
   }
