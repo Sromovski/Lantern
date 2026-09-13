@@ -2709,6 +2709,8 @@ below, not later.
 
 > **Status:** the **Normalization hardening + golden hash** and **Large-text performance** rows are done on branch `phase-2-foundations` (docs/plans/phase-2-foundations.md, Tasks F1–F2).
 
+> **Status:** the **Stricter numbers**, **Total gate and typed apply errors**, **Archive-wrapped aggregator URLs**, **Request timeout / `AbortSignal`**, **Fail fast on invalid caller headers** and **Final URL after redirects** rows are done on branch `phase-2-hardening` (docs/plans/phase-2-hardening.md, Tasks H1–H4).
+
 The whole-branch review of Part B found issues that are real but out of scope for
 the F1–F7 fix wave. They are not forgotten — they must land before the milestone
 named below, not later.

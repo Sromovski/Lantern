@@ -127,9 +127,12 @@ four and taken on the fifth is not free.
   Prefer system cron — a crashed daemon silently stops posting; a cron job
   leaves a log.
   The CLI locates the project root from its own install location, not the
-  working directory (override with `LANTERN_ROOT`); `.env` is read from that
-  root, with shell environment variables taking precedence — so a Windows
-  Task Scheduler entry needs no "Start in" directory. `lantern doctor` exits
+  working directory (override with `LANTERN_ROOT`), and reads `.env` from that
+  root, with shell environment variables taking precedence. Node's own module
+  resolution still uses the working directory: `npm run lantern` and
+  `node --import tsx src/cli.ts` need the Task Scheduler "Start in" directory
+  set to the project root, and only a compiled
+  `node <absolute path>\dist\src\cli.js` needs none. `lantern doctor` exits
   1 on any failed check and 0 otherwise.
 - **Config:** `.env` for secrets (never committed), `config/verticals/*.yaml`
   for vertical definitions, `config/channels/*.yaml` for destinations.
