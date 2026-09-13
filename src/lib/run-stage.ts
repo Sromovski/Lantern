@@ -6,6 +6,18 @@ export interface StageContext {
   channelId?: number | null;
 }
 
+function bigintReplacer(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? value.toString() : value;
+}
+
+function safeStringify(detail: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(detail, bigintReplacer);
+  } catch {
+    return JSON.stringify({ ...detail, result: { unserializable: true } }, bigintReplacer);
+  }
+}
+
 export async function runStage<T>(
   db: Db,
   ctx: StageContext,
@@ -17,16 +29,19 @@ export async function runStage<T>(
      VALUES (?, ?, ?, ?, ?, ?)`,
   );
   const log = (ok: boolean, detail: Record<string, unknown>) =>
-    insert.run(ctx.verticalId ?? null, ctx.channelId ?? null, ctx.stage, ok ? 1 : 0, JSON.stringify(detail), now().toISOString());
+    insert.run(ctx.verticalId ?? null, ctx.channelId ?? null, ctx.stage, ok ? 1 : 0, safeStringify(detail), now().toISOString());
 
   const started = Date.now();
   log(true, { phase: 'start' });
+
+  let result: T;
   try {
-    const result = await fn();
-    log(true, { phase: 'end', ms: Date.now() - started, result: result ?? null });
-    return result;
+    result = await fn();
   } catch (err) {
     log(false, { phase: 'end', ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
     throw err;
   }
+
+  log(true, { phase: 'end', ms: Date.now() - started, result: result ?? null });
+  return result;
 }

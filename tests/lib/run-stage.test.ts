@@ -41,4 +41,24 @@ describe('runStage', () => {
     const [, end] = rows(db);
     expect(end).toMatchObject({ ok: 0, detail: { phase: 'end', error: 'quota exhausted' } });
   });
+
+  it('serializes a bigint in the result (e.g. a lastInsertRowid) to a decimal string and still reports ok', async () => {
+    const db = testDb();
+    const result = await runStage(db, { stage: 'publish' }, () => ({ remoteId: 10n }));
+    expect(result).toEqual({ remoteId: 10n });
+    const [, end] = rows(db);
+    expect(end!.ok).toBe(1);
+    expect(end!.detail.result).toEqual({ remoteId: '10' });
+  });
+
+  it('falls back to an unserializable marker when the result cannot be JSON-stringified at all, and still reports ok', async () => {
+    const db = testDb();
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const result = await runStage(db, { stage: 'publish' }, () => circular);
+    expect(result).toBe(circular);
+    const [, end] = rows(db);
+    expect(end!.ok).toBe(1);
+    expect(end!.detail.result).toEqual({ unserializable: true });
+  });
 });
