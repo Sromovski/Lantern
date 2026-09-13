@@ -1,15 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyQuoteDecision,
   ItemNotFoundError,
   ItemNotRawError,
   NotAQuoteError,
   NotReopenableError,
   parseRejectReason,
   reopenInsufficientEvidence,
+  verifyQuoteItem,
 } from '../../src/verify/apply.js';
 import { decideQuote, type QuoteEvidence } from '../../src/verify/quote-gate.js';
-import { assertSourceAllowed, SourcePolicyError } from '../../src/verify/source-policy.js';
+import { assertSourceAllowed } from '../../src/verify/source-policy.js';
 import { seedItem, testDb } from '../helpers/db.js';
 
 const QUOTE = 'It was the best of times, it was the worst of times';
@@ -159,7 +159,7 @@ describe('decideQuote', () => {
 
       const db = testDb();
       const { itemId } = seedItem(db, QUOTE);
-      expect(() => applyQuoteDecision(db, itemId, d)).not.toThrow();
+      expect(verifyQuoteItem(db, itemId, evidence)).toEqual(d);
     }
     expect(verified).toBeGreaterThan(0);
   });
@@ -172,7 +172,9 @@ describe('decideQuote', () => {
 
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);
-    expect(() => applyQuoteDecision(db, itemId, d)).not.toThrow();
+    expect(
+      verifyQuoteItem(db, itemId, [primary(), { ...scholarly, url: 'https://www.gutenberg.org/ebooks/98?utm_source=goodreads.com' }]),
+    ).toEqual(d);
     expect(db.prepare('SELECT status FROM items WHERE id = ?').pluck().get(itemId)).toBe('verified');
   });
 
@@ -182,14 +184,14 @@ describe('decideQuote', () => {
   });
 });
 
-describe('applyQuoteDecision', () => {
+describe('verifyQuoteItem', () => {
   const statusOf = (db: ReturnType<typeof testDb>, id: number) =>
     db.prepare('SELECT status, reject_reason FROM items WHERE id = ?').get(id);
 
   it('writes sources and promotes a verified item', () => {
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);
-    applyQuoteDecision(db, itemId, decideQuote(QUOTE, [primary()]));
+    verifyQuoteItem(db, itemId, [primary()]);
     expect(statusOf(db, itemId)).toEqual({ status: 'verified', reject_reason: null });
     expect(db.prepare('SELECT tier FROM sources WHERE item_id = ?').pluck().all(itemId)).toEqual([1]);
   });
@@ -197,7 +199,7 @@ describe('applyQuoteDecision', () => {
   it('records the reason for a rejection and writes no sources', () => {
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);
-    applyQuoteDecision(db, itemId, decideQuote(QUOTE, [wikiquote]));
+    verifyQuoteItem(db, itemId, [wikiquote]);
     expect(statusOf(db, itemId)).toMatchObject({ status: 'rejected', reject_reason: expect.stringMatching(/^insufficient-evidence: /) });
     expect(db.prepare('SELECT COUNT(*) FROM sources').pluck().get()).toBe(0);
   });
@@ -205,21 +207,31 @@ describe('applyQuoteDecision', () => {
   it('refuses to re-decide an item that is not raw', () => {
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);
-    applyQuoteDecision(db, itemId, decideQuote(QUOTE, [wikiquote]));
-    expect(() => applyQuoteDecision(db, itemId, decideQuote(QUOTE, [primary()]))).toThrow(/only raw items/);
+    verifyQuoteItem(db, itemId, [wikiquote]);
+    expect(() => verifyQuoteItem(db, itemId, [primary()])).toThrow(/only raw items/);
   });
 
-  it('rolls back entirely if any source violates policy', () => {
+  it('returns the decision it applied', () => {
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);
-    const forged = {
-      status: 'verified' as const,
-      sources: [
-        { tier: 1 as const, citation: 'A Tale of Two Cities' },
-        { tier: 2 as const, citation: 'x', url: 'https://www.goodreads.com/quotes/1' },
-      ],
-    };
-    expect(() => applyQuoteDecision(db, itemId, forged)).toThrow(SourcePolicyError);
+    expect(verifyQuoteItem(db, itemId, [primary(), wikiquote])).toEqual(decideQuote(QUOTE, [primary(), wikiquote]));
+  });
+
+  it('decides against the stored body, not against whatever the evidence quotes', () => {
+    const db = testDb();
+    const { itemId } = seedItem(db, 'Please, sir, I want some more of the gruel');
+    expect(verifyQuoteItem(db, itemId, [primary()])).toMatchObject({ status: 'rejected', reason: 'insufficient-evidence' });
+    expect(statusOf(db, itemId)).toMatchObject({ status: 'rejected' });
+    expect(db.prepare('SELECT COUNT(*) FROM sources').pluck().get()).toBe(0);
+  });
+
+  it('rolls back entirely if a source insert fails part-way', () => {
+    const db = testDb();
+    const { itemId } = seedItem(db, QUOTE);
+    db.exec(
+      "CREATE TRIGGER test_refuse_tier3 BEFORE INSERT ON sources WHEN NEW.tier = 3 BEGIN SELECT RAISE(ABORT, 'test: tier 3 refused'); END;",
+    );
+    expect(() => verifyQuoteItem(db, itemId, [primary(), wikiquote])).toThrow(/test: tier 3 refused/);
     expect(statusOf(db, itemId)).toMatchObject({ status: 'raw' });
     expect(db.prepare('SELECT COUNT(*) FROM sources').pluck().get()).toBe(0);
   });
@@ -227,13 +239,13 @@ describe('applyQuoteDecision', () => {
   it('throws ItemNotRawError for an item that was already decided', () => {
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);
-    applyQuoteDecision(db, itemId, decideQuote(QUOTE, [wikiquote]));
-    expect(() => applyQuoteDecision(db, itemId, decideQuote(QUOTE, [primary()]))).toThrow(ItemNotRawError);
+    verifyQuoteItem(db, itemId, [wikiquote]);
+    expect(() => verifyQuoteItem(db, itemId, [primary()])).toThrow(ItemNotRawError);
   });
 
   it('throws ItemNotFoundError for a missing item', () => {
     const db = testDb();
-    expect(() => applyQuoteDecision(db, 9999, decideQuote(QUOTE, [primary()]))).toThrow(ItemNotFoundError);
+    expect(() => verifyQuoteItem(db, 9999, [primary()])).toThrow(ItemNotFoundError);
   });
 
   it('refuses to apply a quote decision to a non-quote item', () => {
@@ -246,7 +258,7 @@ describe('applyQuoteDecision', () => {
         )
         .run(verticalId).lastInsertRowid,
     );
-    expect(() => applyQuoteDecision(db, factId, decideQuote(QUOTE, [primary()]))).toThrow(NotAQuoteError);
+    expect(() => verifyQuoteItem(db, factId, [primary()])).toThrow(NotAQuoteError);
     expect(db.prepare('SELECT COUNT(*) FROM sources').pluck().get()).toBe(0);
   });
 });
@@ -268,10 +280,10 @@ describe('reopenInsufficientEvidence', () => {
   it('reopens an insufficient-evidence rejection so the quote can be verified later', () => {
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);
-    applyQuoteDecision(db, itemId, decideQuote(QUOTE, [wikiquote]));
+    verifyQuoteItem(db, itemId, [wikiquote]);
     reopenInsufficientEvidence(db, itemId);
     expect(statusOf(db, itemId)).toEqual({ status: 'raw', reject_reason: null });
-    applyQuoteDecision(db, itemId, decideQuote(QUOTE, [primary()]));
+    verifyQuoteItem(db, itemId, [primary()]);
     expect(statusOf(db, itemId)).toMatchObject({ status: 'verified' });
   });
 
@@ -279,7 +291,7 @@ describe('reopenInsufficientEvidence', () => {
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);
     const listed: QuoteEvidence = { kind: 'listed-misattributed', citation: 'Wikiquote: Misattributed' };
-    applyQuoteDecision(db, itemId, decideQuote(QUOTE, [listed]));
+    verifyQuoteItem(db, itemId, [listed]);
     expect(() => reopenInsufficientEvidence(db, itemId)).toThrow(NotReopenableError);
     expect(statusOf(db, itemId)).toMatchObject({ status: 'rejected' });
   });
@@ -293,7 +305,7 @@ describe('reopenInsufficientEvidence', () => {
   it('refuses to reopen a verified item', () => {
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);
-    applyQuoteDecision(db, itemId, decideQuote(QUOTE, [primary()]));
+    verifyQuoteItem(db, itemId, [primary()]);
     expect(() => reopenInsufficientEvidence(db, itemId)).toThrow(NotReopenableError);
     expect(statusOf(db, itemId)).toMatchObject({ status: 'verified' });
   });

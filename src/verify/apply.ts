@@ -1,6 +1,6 @@
 import { insertSource } from '../db/sources.js';
 import type { Db } from '../db/connection.js';
-import type { QuoteDecision } from './quote-gate.js';
+import { decideQuote, type QuoteDecision, type QuoteEvidence } from './quote-gate.js';
 
 export class ItemNotFoundError extends Error {
   override name = 'ItemNotFoundError';
@@ -52,11 +52,12 @@ export function parseRejectReason(text: string): { reason: string; detail: strin
 interface ItemRow {
   status: string;
   kind: string;
+  body: string;
   reject_reason: string | null;
 }
 
 function loadQuote(db: Db, itemId: number): ItemRow {
-  const item = db.prepare('SELECT status, kind, reject_reason FROM items WHERE id = ?').get(itemId) as
+  const item = db.prepare('SELECT status, kind, body, reject_reason FROM items WHERE id = ?').get(itemId) as
     | ItemRow
     | undefined;
   if (!item) throw new ItemNotFoundError(itemId);
@@ -64,11 +65,16 @@ function loadQuote(db: Db, itemId: number): ItemRow {
   return item;
 }
 
-/** The only code path that moves a quote item out of 'raw'. */
-export function applyQuoteDecision(db: Db, itemId: number, decision: QuoteDecision, now: Date = new Date()): void {
-  db.transaction(() => {
+/**
+ * The only code path that moves a quote item out of 'raw'. The decision is computed here, from the
+ * stored body and the given evidence, inside the same transaction that writes it, so no caller can
+ * hand in a decision that decideQuote never made. Returns the decision it applied.
+ */
+export function verifyQuoteItem(db: Db, itemId: number, evidence: QuoteEvidence[], now: Date = new Date()): QuoteDecision {
+  return db.transaction(() => {
     const item = loadQuote(db, itemId);
     if (item.status !== 'raw') throw new ItemNotRawError(itemId, item.status);
+    const decision = decideQuote(item.body, evidence);
 
     if (decision.status === 'verified') {
       for (const source of decision.sources) insertSource(db, itemId, source, now);
@@ -79,6 +85,7 @@ export function applyQuoteDecision(db: Db, itemId: number, decision: QuoteDecisi
         itemId,
       );
     }
+    return decision;
   })();
 }
 
