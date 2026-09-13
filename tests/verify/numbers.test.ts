@@ -17,6 +17,18 @@ describe('extractNumbers', () => {
   it('returns nothing for text without numerals', () => {
     expect(extractNumbers('three blind mice')).toEqual([]);
   });
+
+  it('preserves negative signs', () => {
+    expect(extractNumbers('dropped to -5 degrees, then −3')).toEqual(['-5', '-3']);
+  });
+
+  it('does not extract range or label numbers', () => {
+    expect(extractNumbers('pages 10-20 of the COVID-19 report')).toEqual(['10', '20', '19']);
+  });
+
+  it('normalizes leading decimals and negated decimals', () => {
+    expect(extractNumbers('grew by .5 percent, then fell by -.25')).toEqual(['0.5', '-0.25']);
+  });
 });
 
 describe('unsupportedNumbers', () => {
@@ -35,5 +47,17 @@ describe('unsupportedNumbers', () => {
 
   it('reports each unsupported number once', () => {
     expect(unsupportedNumbers('42, then 42 again', [])).toEqual(['42']);
+  });
+
+  it('preserves negative sign in unsupported check', () => {
+    expect(unsupportedNumbers('the temperature dropped to -5 degrees', ['recorded at 5 degrees above zero'])).toEqual(['-5']);
+  });
+
+  it('flags leading decimal as unsupported when source lacks it', () => {
+    expect(unsupportedNumbers('grew by .5 percent', ['grew by roughly 5 percent'])).toEqual(['0.5']);
+  });
+
+  it('accepts leading decimal when source has normalized form', () => {
+    expect(unsupportedNumbers('grew by .5 percent', ['grew by 0.5 percent'])).toEqual([]);
   });
 });
