@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DownloadStatusError, DownloadTooLargeError, downloadWithRetry } from '../../src/lib/download.js';
-import { HttpError } from '../../src/lib/http.js';
+import { HttpError, type RetryEvent } from '../../src/lib/http.js';
 
 const UA = 'Lantern/test (test@example.invalid)';
 const PAYLOAD = Buffer.alloc(64_000, 7);
@@ -230,5 +230,36 @@ describe('downloadWithRetry', () => {
     expect(calls).toEqual([]);
     expect(existsSync(join(dest, 'inside'))).toBe(true);
     expect(leftovers()).toEqual([]);
+  });
+
+  it('reports a retry through onRetry', async () => {
+    const srv = await serve((_req, res, n) => {
+      if (n === 1) {
+        res.writeHead(503);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'image/png' });
+      res.end(PAYLOAD);
+    });
+    const events: RetryEvent[] = [];
+    const { sleep } = recordingSleep();
+    await downloadWithRetry(`${srv.base}/x.png`, join(dir, 'x.png'), { userAgent: UA, sleep, onRetry: (e) => events.push(e) });
+    expect(events).toEqual([{ url: `${srv.base}/x.png`, attempt: 1, delayMs: 500, reason: 'HTTP 503' }]);
+  });
+
+  it('reports where a redirected download ended when it fails', async () => {
+    const srv = await serve((req, res) => {
+      if (req.url === '/old.jpg') {
+        res.writeHead(302, { location: '/gone.jpg' });
+        res.end();
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    const err = await downloadWithRetry(`${srv.base}/old.jpg`, join(dir, 'gone.jpg'), { userAgent: UA }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DownloadStatusError);
+    expect(err).toMatchObject({ status: 404, finalUrl: `${srv.base}/gone.jpg` });
   });
 });

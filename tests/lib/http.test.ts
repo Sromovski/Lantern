@@ -7,6 +7,7 @@ import {
   HttpError,
   retryAfterMs,
   retryDelayMs,
+  type RetryEvent,
   UnsupportedBodyError,
 } from '../../src/lib/http.js';
 
@@ -409,6 +410,29 @@ describe('fetchWithRetry with a non-idempotent method', () => {
     expect(res.status).toBe(200);
     expect(srv.seen).toHaveLength(2);
     expect(calls).toEqual([500]);
+  });
+});
+
+describe('fetchWithRetry onRetry', () => {
+  it('reports a retryable status before waiting', async () => {
+    const srv = await scriptedServer([{ status: 503 }, { status: 200 }]);
+    const events: RetryEvent[] = [];
+    const { sleep } = recordingSleep();
+    await fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep, onRetry: (e) => events.push(e) });
+    expect(events).toEqual([{ url: srv.base, attempt: 1, delayMs: 500, reason: 'HTTP 503' }]);
+  });
+
+  it('reports a network failure before waiting, and nothing after the last attempt', async () => {
+    const fetchImpl = (async () => {
+      throw new Error('socket hang up');
+    }) as unknown as typeof fetch;
+    const events: RetryEvent[] = [];
+    const { sleep } = recordingSleep();
+    await fetchWithRetry(
+      { url: 'http://127.0.0.1:1/' },
+      { userAgent: UA, sleep, fetchImpl, maxAttempts: 2, onRetry: (e) => events.push(e) },
+    ).catch(() => {});
+    expect(events).toEqual([{ url: 'http://127.0.0.1:1/', attempt: 1, delayMs: 500, reason: 'socket hang up' }]);
   });
 });
 

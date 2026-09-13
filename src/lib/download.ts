@@ -5,6 +5,7 @@ import { Readable, Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import {
+  errorReason,
   HttpError,
   isRetryableStatus,
   resolveHttpOptions,
@@ -36,6 +37,8 @@ export class DownloadStatusError extends Error {
     readonly url: string,
     readonly status: number,
     readonly attempts: number,
+    /** Where the request ended after redirects, so the caller can re-check the host it landed on. */
+    readonly finalUrl?: string,
   ) {
     super(`download failed with HTTP ${status} after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${url}`);
   }
@@ -114,9 +117,11 @@ export async function downloadWithRetry(url: string, destPath: string, opts: Dow
         const retryAfter = res.headers.get('retry-after');
         const header = retryAfterMs(retryAfter, o.now());
         if (!isRetryableStatus(res.status) || attempt === o.maxAttempts || (header !== null && header > delays.maxDelayMs)) {
-          throw new DownloadStatusError(url, res.status, attempt);
+          throw new DownloadStatusError(url, res.status, attempt, res.url || url);
         }
-        await o.sleep(retryDelayMs(attempt, retryAfter, { ...delays, nowMs: o.now() }));
+        const delayMs = retryDelayMs(attempt, retryAfter, { ...delays, nowMs: o.now() });
+        o.onRetry({ url, attempt, delayMs, reason: `HTTP ${res.status}` });
+        await o.sleep(delayMs);
         continue;
       }
       const { bytes, sha256 } = await writeBody(res, tmp, url, maxBytes, signal);
@@ -126,7 +131,11 @@ export async function downloadWithRetry(url: string, destPath: string, opts: Dow
       rmSync(tmp, { force: true });
       if (err instanceof DownloadStatusError || err instanceof DownloadTooLargeError) throw err;
       lastError = err;
-      if (attempt < o.maxAttempts) await o.sleep(retryDelayMs(attempt, null, { ...delays, nowMs: o.now() }));
+      if (attempt < o.maxAttempts) {
+        const delayMs = retryDelayMs(attempt, null, { ...delays, nowMs: o.now() });
+        o.onRetry({ url, attempt, delayMs, reason: errorReason(err) });
+        await o.sleep(delayMs);
+      }
     }
   }
 
