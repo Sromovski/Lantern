@@ -1,7 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { buildUserAgent, fetchWithRetry, HttpError, retryDelayMs } from '../../src/lib/http.js';
+import {
+  buildUserAgent,
+  fetchWithRetry,
+  HttpError,
+  retryAfterMs,
+  retryDelayMs,
+  UnsupportedBodyError,
+} from '../../src/lib/http.js';
 
 type Scripted = { status: number; headers?: Record<string, string>; body?: string };
 interface Seen {
@@ -120,11 +127,13 @@ describe('fetchWithRetry', () => {
     expect(calls).toEqual([3000]);
   });
 
-  it('caps any delay at maxDelayMs', async () => {
+  it('returns the response instead of retrying early when Retry-After exceeds maxDelayMs', async () => {
     const srv = await scriptedServer([{ status: 429, headers: { 'retry-after': '3600' } }, { status: 200 }]);
     const { sleep, calls } = recordingSleep();
-    await fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep });
-    expect(calls).toEqual([30_000]);
+    const res = await fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep });
+    expect(res.status).toBe(429);
+    expect(srv.seen).toHaveLength(1);
+    expect(calls).toEqual([]);
   });
 
   it.each([400, 401, 403, 404])('never retries a %i', async (status) => {
@@ -214,6 +223,36 @@ describe('fetchWithRetry', () => {
     ).rejects.toThrow(RangeError);
     expect(called).toBe(false);
   });
+
+  it.each(['', '   '])('rejects a blank userAgent (%j) without making a request', async (userAgent) => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      throw new Error('unreachable');
+    }) as unknown as typeof fetch;
+    await expect(fetchWithRetry({ url: 'http://127.0.0.1:1/' }, { userAgent, fetchImpl })).rejects.toThrow(TypeError);
+    expect(called).toBe(false);
+  });
+
+  it.each(['text/plain; charset=iso-8859-1', 'image/png'])(
+    'fails closed without retrying on an undecodable body (%s)',
+    async (contentType) => {
+      const srv = await scriptedServer([{ status: 200, headers: { 'content-type': contentType }, body: 'x' }]);
+      const { sleep, calls } = recordingSleep();
+      await expect(fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep })).rejects.toThrow(UnsupportedBodyError);
+      expect(srv.seen).toHaveLength(1);
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it.each(['application/json', 'application/ld+json', 'text/html; charset=UTF-8'])(
+    'accepts the text body type %s',
+    async (contentType) => {
+      const srv = await scriptedServer([{ status: 200, headers: { 'content-type': contentType }, body: 'ok' }]);
+      const { sleep } = recordingSleep();
+      expect(await fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep })).toMatchObject({ status: 200, body: 'ok' });
+    },
+  );
 });
 
 describe('retryDelayMs', () => {
@@ -238,6 +277,25 @@ describe('retryDelayMs', () => {
   it('trims whitespace around a numeric Retry-After', () => {
     expect(retryDelayMs(1, ' 2 ', opts)).toBe(2000);
   });
+});
+
+describe('retryAfterMs', () => {
+  const now = Date.parse('2026-01-01T00:00:00Z');
+
+  it('reads delta-seconds uncapped', () => {
+    expect(retryAfterMs('3600', now)).toBe(3_600_000);
+  });
+
+  it('reads an IMF-fixdate', () => {
+    expect(retryAfterMs('Thu, 01 Jan 2026 00:00:03 GMT', now)).toBe(3000);
+  });
+
+  it.each(['May 1', 'Mon 2', 'a 1', '1.5', '-1', 'soon', '2026-01-01T00:00:03Z'])(
+    'treats %j as absent',
+    (value) => {
+      expect(retryAfterMs(value, now)).toBeNull();
+    },
+  );
 });
 
 describe('buildUserAgent', () => {

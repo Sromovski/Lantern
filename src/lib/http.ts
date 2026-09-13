@@ -35,6 +35,39 @@ export class HttpError extends Error {
   }
 }
 
+export class UnsupportedBodyError extends Error {
+  override name = 'UnsupportedBodyError';
+
+  constructor(
+    readonly url: string,
+    readonly reason: string,
+  ) {
+    super(`${reason} for ${url}: only UTF-8 or US-ASCII text bodies are supported; binary needs a streaming download`);
+  }
+}
+
+const TEXT_CHARSETS = new Set(['utf-8', 'utf8', 'us-ascii', 'ascii']);
+
+/** Returns a reason string when the body must not be decoded as text, or null when it is safe. */
+export function unsupportedBodyReason(contentType: string | null): string | null {
+  if (!contentType) return null;
+  const [mediaType = '', ...params] = contentType.split(';').map((part) => part.trim().toLowerCase());
+  const [type = '', subtype = ''] = mediaType.split('/');
+  const textual =
+    type === 'text' ||
+    subtype === 'json' ||
+    subtype === 'xml' ||
+    subtype === 'javascript' ||
+    subtype === 'x-www-form-urlencoded' ||
+    subtype.endsWith('+json') ||
+    subtype.endsWith('+xml');
+  if (!textual) return `non-text media type "${mediaType}"`;
+  const charsetParam = params.find((p) => p.startsWith('charset='));
+  const charset = charsetParam?.slice('charset='.length).replace(/^"|"$/g, '');
+  if (charset && !TEXT_CHARSETS.has(charset)) return `unsupported charset "${charset}"`;
+  return null;
+}
+
 const DEFAULTS = { maxAttempts: 4, baseDelayMs: 500, maxDelayMs: 30_000 } as const;
 
 export function buildUserAgent(contact: string | undefined, version: string): string {
@@ -51,19 +84,27 @@ export function isRetryableStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
+const IMF_FIXDATE =
+  /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+export function retryAfterMs(retryAfter: string | null, nowMs: number): number | null {
+  if (retryAfter === null) return null;
+  const trimmed = retryAfter.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  if (IMF_FIXDATE.test(trimmed)) {
+    const at = Date.parse(trimmed);
+    if (!Number.isNaN(at)) return Math.max(0, at - nowMs);
+  }
+  return null;
+}
+
 export function retryDelayMs(
   attempt: number,
   retryAfter: string | null,
   opts: { baseDelayMs: number; maxDelayMs: number; nowMs: number },
 ): number {
-  if (retryAfter !== null) {
-    const trimmed = retryAfter.trim();
-    if (/^\d+$/.test(trimmed)) return Math.min(Number(trimmed) * 1000, opts.maxDelayMs);
-    if (/[a-z]/i.test(trimmed)) {
-      const at = Date.parse(trimmed);
-      if (!Number.isNaN(at)) return Math.min(Math.max(0, at - opts.nowMs), opts.maxDelayMs);
-    }
-  }
+  const header = retryAfterMs(retryAfter, opts.nowMs);
+  if (header !== null) return Math.min(header, opts.maxDelayMs);
   return Math.min(opts.baseDelayMs * 2 ** (attempt - 1), opts.maxDelayMs);
 }
 
@@ -73,6 +114,9 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
   const maxAttempts = opts.maxAttempts ?? DEFAULTS.maxAttempts;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
     throw new RangeError(`maxAttempts must be an integer >= 1, got ${maxAttempts}`);
+  }
+  if (!opts.userAgent.trim()) {
+    throw new TypeError('userAgent must be a non-empty contact User-Agent (see buildUserAgent)');
   }
   const delays = {
     baseDelayMs: opts.baseDelayMs ?? DEFAULTS.baseDelayMs,
@@ -90,8 +134,14 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
       const headers = new Headers(req.headers);
       headers.set('user-agent', opts.userAgent);
       res = await fetchImpl(req.url, { method: req.method ?? 'GET', headers, body: req.body });
+      const reason = unsupportedBodyReason(res.headers.get('content-type'));
+      if (reason !== null) {
+        await res.body?.cancel().catch(() => {});
+        throw new UnsupportedBodyError(req.url, reason);
+      }
       body = await res.text();
     } catch (err) {
+      if (err instanceof UnsupportedBodyError) throw err;
       lastError = err;
       if (attempt < maxAttempts) await sleep(retryDelayMs(attempt, null, { ...delays, nowMs: now() }));
       continue;
@@ -103,6 +153,8 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
       body,
     };
     if (!isRetryableStatus(res.status) || attempt === maxAttempts) return result;
+    const header = retryAfterMs(res.headers.get('retry-after'), now());
+    if (header !== null && header > delays.maxDelayMs) return result;
     await sleep(retryDelayMs(attempt, res.headers.get('retry-after'), { ...delays, nowMs: now() }));
   }
 
