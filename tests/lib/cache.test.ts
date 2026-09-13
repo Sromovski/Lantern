@@ -109,6 +109,32 @@ describe('cachedFetch', () => {
     expect(JSON.parse(stored).request.bodySha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('stores only allowlisted response headers', async () => {
+    const { fetcher } = countingFetcher({
+      headers: {
+        'content-type': 'application/json',
+        etag: '"v1"',
+        'x-api-key': 'leak-header-value',
+        'www-authenticate': 'Bearer leak-realm',
+      },
+    });
+    await cachedFetch({ url: 'https://example.test/h' }, { cacheDir: dir, source: 'example', now: NOW }, fetcher);
+    const [file] = readdirSync(join(dir, 'example'));
+    const stored = JSON.parse(readFileSync(join(dir, 'example', file!), 'utf8'));
+    expect(Object.keys(stored.headers).sort()).toEqual(['content-type', 'etag']);
+    expect(JSON.stringify(stored)).not.toMatch(/leak-/);
+  });
+
+  it('refuses to cache a response body that echoes a redacted credential, but still returns it', async () => {
+    const req = { url: 'https://api.example.test/items?api_key=leak-echo-12345&q=dickens' };
+    const { calls, fetcher } = countingFetcher({ body: '{"request":"/items?api_key=leak-echo-12345"}' });
+    const first = await cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher);
+    expect(first).toMatchObject({ status: 200, fromCache: false });
+    expect(existsSync(join(dir, 'example'))).toBe(false);
+    await cachedFetch(req, { cacheDir: dir, source: 'example' }, fetcher);
+    expect(calls).toHaveLength(2);
+  });
+
   it('stores pretty, LF-terminated JSON', async () => {
     const { fetcher } = countingFetcher();
     await cachedFetch({ url: 'https://gutendex.com/books/1400' }, { cacheDir: dir, source: 'gutendex', now: NOW }, fetcher);
@@ -165,5 +191,25 @@ describe('cacheKey and redactUrl', () => {
     expect(cacheKey({ url: 'https://api.example.test/x?api_key=one&q=1' })).toBe(
       cacheKey({ url: 'https://api.example.test/x?api_key=two&q=1' }),
     );
+  });
+
+  it('does not collapse different requests whose parameter names merely contain a credential word', () => {
+    expect(cacheKey({ url: 'https://gutendex.com/books?author=Dickens' })).not.toBe(
+      cacheKey({ url: 'https://gutendex.com/books?author=Austen' }),
+    );
+    const url = 'https://gutendex.com/books?author=Dickens&keyword=war&authority=lc&monkey=1';
+    expect(redactUrl(url)).toBe(url);
+  });
+
+  it('redacts exact credential names regardless of case and separators', () => {
+    const redacted = redactUrl(
+      'https://x.example.test/a?API-KEY=leak-one&Access_Token=leak-two&sig=leak-three&X-Amz-Security-Token=leak-four&jwt=leak-five&q=1',
+    );
+    expect(redacted).not.toMatch(/leak-/);
+    expect(redacted).toContain('q=1');
+  });
+
+  it('strips URL fragments, which servers never receive', () => {
+    expect(redactUrl('https://x.example.test/cb#access_token=leak-frag&state=1')).toBe('https://x.example.test/cb');
   });
 });
