@@ -15,3 +15,14 @@ banned_topics: []
 image:
   style: public-domain author portrait, title page, manuscript page, or period image of the setting
   generated_disclosure: true
+harvest:
+  # Wikidata years equal Gutendex's author years; both must match for authorMatches (spec section 8).
+  authors:
+    - { name: Charles Dickens, gutendex_name: "Dickens, Charles", wikidata_id: Q5686, birth_year: 1812, death_year: 1870 }
+    - { name: Jane Austen, gutendex_name: "Austen, Jane", wikidata_id: Q36322, birth_year: 1775, death_year: 1817 }
+    - { name: Mark Twain, gutendex_name: "Twain, Mark", wikidata_id: Q7245, birth_year: 1835, death_year: 1910 }
+    - { name: Oscar Wilde, gutendex_name: "Wilde, Oscar", wikidata_id: Q30875, birth_year: 1854, death_year: 1900 }
+  picker:
+    model: claude-sonnet-5        # user's choice, 2026-09-13
+    batch_size: 150               # candidates per Claude call (~45 input tokens each)
+    max_batches_per_work: 6       # spend cap per book

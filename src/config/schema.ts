@@ -8,6 +8,26 @@ export type RenditionFormat = (typeof RENDITION_FORMATS)[number];
 const slug = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'must be a lowercase kebab-case slug');
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be HH:MM (24h)');
 
+export const harvestAuthorSchema = z
+  .strictObject({
+    name: z.string().min(1),
+    /** Exactly as Gutendex lists the author ("Surname, Given"); matched with the years to set authorMatches. */
+    gutendex_name: z.string().regex(/^[^,]+, [^,]+$/, 'must be "Surname, Given" as Gutendex lists it'),
+    wikidata_id: z.string().regex(/^Q[1-9]\d*$/, 'must be a Wikidata Q-number'),
+    birth_year: z.number().int(),
+    death_year: z.number().int(),
+  })
+  .refine((a) => a.death_year >= a.birth_year, { message: 'death_year must not be before birth_year', path: ['death_year'] });
+
+export const harvestSchema = z.strictObject({
+  authors: z.array(harvestAuthorSchema).min(1),
+  picker: z.strictObject({
+    model: z.string().min(1),
+    batch_size: z.number().int().min(10).max(500),
+    max_batches_per_work: z.number().int().min(1).max(50),
+  }),
+});
+
 export const verticalSchema = z
   .strictObject({
     slug,
@@ -24,6 +44,7 @@ export const verticalSchema = z
       style: z.string().min(1),
       generated_disclosure: z.literal(true),
     }),
+    harvest: harvestSchema.optional(),
   })
   .superRefine((v, ctx) => {
     if (v.kid_safe && (!v.audience.reading_level || v.banned_topics.length === 0)) {
@@ -71,3 +92,4 @@ export const channelSchema = z
 
 export type VerticalConfig = z.infer<typeof verticalSchema>;
 export type ChannelConfig = z.infer<typeof channelSchema>;
+export type HarvestConfig = z.infer<typeof harvestSchema>;
