@@ -49,4 +49,36 @@ describe('extractCandidates', () => {
     const twice = `${'A quiet sentence that the author happened to repeat word for word.'}\n\n${'A quiet sentence that the author happened to repeat word for word.'}`;
     expect(extractCandidates(twice)).toEqual(['A quiet sentence that the author happened to repeat word for word.']);
   });
+
+  it('skips text that may not be the author\'s printed words or cannot stand alone', () => {
+    const plain = 'The plain sentence that remains is the only one in this body the author\'s own hand wrote.';
+    const edges = [
+      'Produced by An Anonymous Volunteer, and David Widger and many other kind helpers.',
+      '',
+      '[Illustration: The old house at night, with its windows all dark and shuttered.]',
+      '',
+      '    To be, or not to be, that is the question which all thinking men must answer.',
+      '',
+      '\u2018I shall never go back to that house again, not for anything,\u2019 said the old woman quietly.',
+      '',
+      'She was _very_ much surprised to find the garden gate standing open that morning.',
+      '',
+      'The road ran on through the dark wood--',
+      'and out again into the grey and silent fields beyond the river.',
+      '',
+      'and so the long day ended at last, quietly and without any further trouble at all.',
+      '',
+      plain,
+    ].join('\r\n');
+    expect(extractCandidates(edges)).toEqual([plain]);
+  });
+
+  it('joins a sentence across a title abbreviation or an initial instead of cutting it', () => {
+    expect(
+      extractCandidates('They sent at once for Mr. Lorry, who came down the stairs slowly and without a word to anyone. It was late.'),
+    ).toEqual(['They sent at once for Mr. Lorry, who came down the stairs slowly and without a word to anyone.']);
+    expect(
+      extractCandidates('The letter was signed by J. Jarndyce and sealed with plain black wax that morning.\r\n\r\nShort one.'),
+    ).toEqual(['The letter was signed by J. Jarndyce and sealed with plain black wax that morning.']);
+  });
 });

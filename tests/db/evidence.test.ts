@@ -27,6 +27,24 @@ describe('item evidence', () => {
     expect(loadEvidence(db, itemId)).toEqual(ALL);
   });
 
+  it('round-trips a negative author verdict and a tier 1 location', () => {
+    const db = testDb();
+    const { itemId } = seedItem(db, QUOTE);
+    const evidence: QuoteEvidence[] = [
+      {
+        kind: 'primary-text',
+        citation: 'Thomas Carlyle, Sartor Resartus (1836)',
+        url: 'https://www.gutenberg.org/cache/epub/1051/pg1051.txt',
+        excerpt: QUOTE,
+        location: 'Book 2, Chapter 9',
+        authorMatches: false,
+      },
+      { kind: 'scholarly', citation: 'A different author\'s collected letters', authorMatches: false },
+    ];
+    for (const e of evidence) insertEvidence(db, itemId, e);
+    expect(loadEvidence(db, itemId)).toEqual(evidence);
+  });
+
   it('feeds the quote gate unchanged', () => {
     const db = testDb();
     const { itemId } = seedItem(db, QUOTE);

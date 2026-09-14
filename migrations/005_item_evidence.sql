@@ -7,6 +7,7 @@ CREATE TABLE item_evidence (
   citation       TEXT NOT NULL CHECK (length(trim(citation)) > 0),
   url            TEXT,
   excerpt        TEXT,
+  location       TEXT CHECK (location IS NULL OR kind = 'primary-text'),
   author_matches INTEGER CHECK (author_matches IN (0, 1)),
   other_author   TEXT,
   recorded_at    TEXT NOT NULL

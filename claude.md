@@ -159,7 +159,7 @@ lantern/
     media/
       source/           # downloaded PD + generated source images
       renditions/       # composed output, by post id / format
-    cache/              # raw API responses, hashed by request
+    cache/              # raw API responses, hashed by request; full Gutenberg texts in gutenberg-text/
   migrations/
   src/
     cli.ts              # entry point, subcommands
@@ -289,6 +289,7 @@ CREATE TABLE item_evidence (
   citation       TEXT NOT NULL,
   url            TEXT,
   excerpt        TEXT,
+  location       TEXT,                  -- primary-text evidence only: where the excerpt is in the work
   author_matches INTEGER,               -- primary-text and scholarly evidence only
   other_author   TEXT,                  -- attribution-conflict evidence only
   recorded_at    TEXT NOT NULL
@@ -391,7 +392,7 @@ CREATE TABLE run_log (
 Indexes: `items(status, vertical_id)`, `items(body_hash)`,
 `posts(status, vertical_id)`, `renditions(post_id, status)`,
 `publications(status, scheduled_for)`, `publications(channel_id, published_at)`,
-`run_log(stage, created_at)` (for `doctor` health checks that query by stage and time).
+`item_evidence(item_id)`, `run_log(stage, created_at)` (for `doctor` health checks that query by stage and time).
 
 All TEXT timestamp columns hold UTC ISO-8601 strings with a `Z` suffix (as
 produced by `Date.prototype.toISOString()`), so they compare correctly as
@@ -417,11 +418,15 @@ harvest → verify → enrich → media → compose → render → caption → q
 Pull raw candidate items from the vertical's configured sources. Writes `items`
 rows with `status='raw'`. Dedupes on `body_hash` (lowercased, punctuation and
 whitespace normalized, smart quotes folded) so the same line never enters twice.
+It also stores the evidence found for each item in `item_evidence`: for a
+passage cut from a public-domain text, the text's URL, the excerpt, its location
+and whether the book is by the attributed author.
 
 **`lantern verify --vertical literature`**
-Runs the attribution gates (§8). Promotes to `verified` with `sources` rows, or
-marks `rejected` with a reason. Rejections are kept, not deleted — they are the
-dedupe memory that stops us re-harvesting the same bad quote monthly.
+Runs the attribution gates (§8) on each raw item's stored `item_evidence`.
+Promotes to `verified` with `sources` rows, or marks `rejected` with a reason.
+Rejections are kept, not deleted — they are the dedupe memory that stops us
+re-harvesting the same bad quote monthly.
 The one exception is a quote rejected only for insufficient evidence: it may be
 reopened to `raw` and verified again once better evidence exists. Every other
 rejection is final.
@@ -491,14 +496,17 @@ makes "why did nothing post on Tuesday" answerable after the fact.
 
 **Quotes (literature vertical).** A quote is `verified` only if it passes one of:
 
-- **Tier 1:** The exact string (normalized) is located in a public-domain
-  full text — Project Gutenberg via the Gutendex API, Standard Ebooks, or
-  Wikisource. Store the work, the location, and the matched excerpt. The item
-  body is that passage exactly as the source prints it, with only whitespace
-  tidied; punctuation, typography and spelling are never normalized for
-  publication. This is the strongest evidence and the preferred path. Prefer
-  harvesting *from* the texts themselves rather than from quote sites; a
-  passage pulled out of Bleak House is verified by construction.
+- **Tier 1:** The exact string (normalized) is located in a public-domain full
+  text — Project Gutenberg via the Gutendex API, Standard Ebooks, or Wikisource.
+  Store the work, the location, and the matched excerpt. The item body is that
+  passage exactly as the source prints it, with only whitespace tidied;
+  punctuation, typography and spelling are never normalized for publication. A
+  passage carrying transcription markup (such as `_italics_` or a bracketed
+  note), or one that may not be the author's own words (indented quotations and
+  verse, dialogue, editorial notes), is skipped rather than cleaned. This is the
+  strongest evidence and the preferred path. Prefer harvesting *from* the texts
+  themselves rather than from quote sites; a passage pulled out of Bleak House
+  is verified by construction.
 - **Tier 2:** Attested in a scholarly or editorial source with a citation
   (Oxford/Yale editions, a university page, the author's collected letters).
 - **Tier 3 alone is never enough.** Wikiquote is useful as a *lead generator* and
@@ -516,10 +524,12 @@ migrations 002-004 as a best-effort backstop for writes that bypass that code. A
 tier 1 source must also be the URL of its full text on Project Gutenberg,
 Standard Ebooks or Wikisource (`PRIMARY_TEXT_DOMAINS`, enforced in TypeScript
 only; archive and proxy copies do not count), and scholarly evidence verifies a
-quote only when it attributes the quote to the same author. If a usable source
-names a different author, the quote is rejected: as an attribution conflict when
-another usable source names the attributed author, and as an author mismatch
-otherwise.
+quote only when it attributes the quote to the same author. A quote is rejected
+as an attribution conflict when any source explicitly attributes it to someone
+else, or when a usable primary text or scholarly source names a different author
+while another usable source names the attributed author; it is rejected as an
+author mismatch when it is found only in other authors' texts or attested only
+for a different author.
 
 Additional hard rejects: quotes attributed to an author who died before the
 phrasing existed; any quote whose earliest traceable appearance is post-1990

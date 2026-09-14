@@ -88,6 +88,38 @@ describe('decideQuote', () => {
     });
   });
 
+  it('rejects as an attribution conflict when tier 1 matches are found in works by the author and by another author', () => {
+    const elsewhere: QuoteEvidence = {
+      kind: 'primary-text',
+      citation: 'Thomas Carlyle, Sartor Resartus (1836)',
+      url: 'https://www.gutenberg.org/ebooks/1051',
+      excerpt: QUOTE,
+      authorMatches: false,
+    };
+    const d = decideQuote(QUOTE, [primary(), elsewhere]);
+    expect(d).toMatchObject({ status: 'rejected', reason: 'attribution-conflict' });
+    if (d.status === 'rejected') expect(d.detail).toContain('Thomas Carlyle');
+  });
+
+  it('rejects as an attribution conflict when a tier 1 match in another author\'s work meets scholarly evidence for the author', () => {
+    expect(decideQuote(QUOTE, [primary(false), scholarly])).toMatchObject({ status: 'rejected', reason: 'attribution-conflict' });
+  });
+
+  it('adds a tier 1 location to the stored citation', () => {
+    const located: QuoteEvidence = {
+      kind: 'primary-text',
+      citation: 'Charles Dickens, A Tale of Two Cities (1859)',
+      url: 'https://www.gutenberg.org/ebooks/98',
+      excerpt: QUOTE,
+      location: 'Book 1, Chapter 1, paragraph 1',
+      authorMatches: true,
+    };
+    const d = decideQuote(QUOTE, [located]);
+    expect(d.status === 'verified' && d.sources[0]?.citation).toBe(
+      'Charles Dickens, A Tale of Two Cities (1859), Book 1, Chapter 1, paragraph 1',
+    );
+  });
+
   it('treats evidence without a boolean authorMatches as unusable rather than as a final author rejection', () => {
     const untypedScholarly = { kind: 'scholarly', citation: 'Untyped harvester output' } as unknown as QuoteEvidence;
     const untypedPrimary = { ...primary(), authorMatches: undefined } as unknown as QuoteEvidence;

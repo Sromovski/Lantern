@@ -4,7 +4,7 @@ import { assertSourceAllowed, SourcePolicyError, type SourceInput, type SourceTi
 export const MIN_QUOTE_WORDS = 5;
 
 export type QuoteEvidence =
-  | { kind: 'primary-text'; citation: string; url?: string; excerpt: string; authorMatches: boolean }
+  | { kind: 'primary-text'; citation: string; url?: string; excerpt: string; location?: string; authorMatches: boolean }
   | { kind: 'scholarly'; citation: string; url?: string; excerpt?: string; authorMatches: boolean }
   | { kind: 'reference'; citation: string; url?: string; excerpt?: string }
   | { kind: 'listed-misattributed'; citation: string; url?: string }
@@ -23,9 +23,12 @@ export type QuoteDecision =
 
 const reject = (reason: QuoteRejectReason, detail: string): QuoteDecision => ({ status: 'rejected', reason, detail });
 
-const toSource = (tier: SourceTier, e: { citation: string; url?: string; excerpt?: string }): SourceInput => ({
+const toSource = (
+  tier: SourceTier,
+  e: { citation: string; url?: string; excerpt?: string; location?: string },
+): SourceInput => ({
   tier,
-  citation: e.citation,
+  citation: e.location === undefined ? e.citation : `${e.citation}, ${e.location}`,
   url: e.url ?? null,
   excerpt: e.excerpt ?? null,
 });
@@ -82,12 +85,15 @@ export function decideQuote(quote: string, evidence: QuoteEvidence[]): QuoteDeci
   const scholarlyOtherAuthor = scholarly.filter((e) => e.authorMatches === false);
   const references = of('reference').filter(usableAs(3)).map((e) => toSource(3, e));
 
+  const primaryOtherAuthor = primaries.filter((e) => e.authorMatches === false);
+  const otherAuthor = [...primaryOtherAuthor, ...scholarlyOtherAuthor];
   // Spec section 8: sources that conflict on the attribution are a hard reject, even when another
-  // source names the attributed author.
-  if ((byAuthor.length > 0 || scholarlyByAuthor.length > 0) && scholarlyOtherAuthor.length > 0) {
+  // source names the attributed author (for example a passage found both in the author's text and in
+  // another author's text, where one of them is quoting).
+  if ((byAuthor.length > 0 || scholarlyByAuthor.length > 0) && otherAuthor.length > 0) {
     return reject(
       'attribution-conflict',
-      `a scholarly source attributes the quote to a different author: ${scholarlyOtherAuthor.map((e) => e.citation).join('; ')}`,
+      `a source attributes the quote to a different author: ${otherAuthor.map((e) => e.citation).join('; ')}`,
     );
   }
   if (byAuthor.length > 0) {

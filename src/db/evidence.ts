@@ -10,6 +10,7 @@ interface EvidenceRow {
   citation: string;
   url: string | null;
   excerpt: string | null;
+  location: string | null;
   author_matches: number | null;
   other_author: string | null;
 }
@@ -23,13 +24,14 @@ export function insertEvidence(db: Db, itemId: number, evidence: QuoteEvidence, 
       ? (evidence.excerpt ?? null)
       : null;
   const otherAuthor = evidence.kind === 'attribution-conflict' ? evidence.otherAuthor : null;
+  const location = evidence.kind === 'primary-text' ? (evidence.location ?? null) : null;
   return Number(
     db
       .prepare(
-        `INSERT INTO item_evidence (item_id, kind, citation, url, excerpt, author_matches, other_author, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO item_evidence (item_id, kind, citation, url, excerpt, location, author_matches, other_author, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(itemId, evidence.kind, evidence.citation, evidence.url ?? null, excerpt, authorMatches, otherAuthor, now.toISOString())
+      .run(itemId, evidence.kind, evidence.citation, evidence.url ?? null, excerpt, location, authorMatches, otherAuthor, now.toISOString())
       .lastInsertRowid,
   );
 }
@@ -42,7 +44,7 @@ export function insertEvidence(db: Db, itemId: number, evidence: QuoteEvidence, 
 export function loadEvidence(db: Db, itemId: number): QuoteEvidence[] {
   const rows = db
     .prepare(
-      'SELECT kind, citation, url, excerpt, author_matches, other_author FROM item_evidence WHERE item_id = ? ORDER BY id',
+      'SELECT kind, citation, url, excerpt, location, author_matches, other_author FROM item_evidence WHERE item_id = ? ORDER BY id',
     )
     .all(itemId) as EvidenceRow[];
   return rows.map((row): QuoteEvidence => {
@@ -53,7 +55,14 @@ export function loadEvidence(db: Db, itemId: number): QuoteEvidence[] {
         if (row.excerpt === null || row.author_matches === null) {
           throw new EvidenceError(`primary-text evidence for item ${itemId} lacks an excerpt or author_matches`);
         }
-        return { kind: 'primary-text', citation: row.citation, ...url, excerpt: row.excerpt, authorMatches: row.author_matches === 1 };
+        return {
+          kind: 'primary-text',
+          citation: row.citation,
+          ...url,
+          excerpt: row.excerpt,
+          ...(row.location === null ? {} : { location: row.location }),
+          authorMatches: row.author_matches === 1,
+        };
       case 'scholarly':
         if (row.author_matches === null) throw new EvidenceError(`scholarly evidence for item ${itemId} lacks author_matches`);
         return { kind: 'scholarly', citation: row.citation, ...url, ...excerpt, authorMatches: row.author_matches === 1 };
