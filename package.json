@@ -12,6 +12,7 @@
     "build": "tsc"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
