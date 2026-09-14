@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { PickerResponseError, pickResultSchema, type PickFn } from './picker.js';
 
@@ -12,28 +12,30 @@ export function loadPickPrompt(root: string): string {
 }
 
 /**
- * A PickFn backed by the Messages API with structured output. API errors (authentication, network,
- * rate limiting after the SDK's retries) propagate and stop the run. A response that cannot be parsed
- * into the pick schema, including a refusal or a truncated answer, becomes a PickerResponseError so
- * only that batch is skipped.
+ * A PickFn backed by the Messages API with structured output (a JSON schema built from
+ * pickResultSchema). Anything that goes wrong making the request (a missing or rejected key, the
+ * network, rate limiting after the SDK's retries, an invalid parameter) propagates and stops the
+ * run. Only reading the answer can fail a batch: a stop other than end_turn (a refusal, a truncated
+ * answer) or text that is not JSON becomes a PickerResponseError, and validatePicks checks the rest.
  */
 export function anthropicPick(client: Anthropic, model: string): PickFn {
+  const { schema } = zodOutputFormat(pickResultSchema);
   return async (system, user) => {
-    const response = await client.messages
-      .parse({
-        model,
-        max_tokens: 4000,
-        system,
-        messages: [{ role: 'user', content: user }],
-        output_config: { format: zodOutputFormat(pickResultSchema), effort: 'low' },
-      })
-      .catch((err: unknown) => {
-        if (err instanceof Anthropic.APIError) throw err;
-        throw new PickerResponseError(`picker output could not be parsed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    if (response.stop_reason !== 'end_turn' || response.parsed_output === null) {
+    const response = await client.messages.create({
+      model,
+      max_tokens: 4000,
+      system,
+      messages: [{ role: 'user', content: user }],
+      output_config: { format: { type: 'json_schema', schema }, effort: 'low' },
+    });
+    if (response.stop_reason !== 'end_turn') {
       throw new PickerResponseError(`picker stopped with ${String(response.stop_reason)} and no usable output`);
     }
-    return response.parsed_output;
+    const text = response.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('');
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new PickerResponseError('picker output is not JSON');
+    }
   };
 }

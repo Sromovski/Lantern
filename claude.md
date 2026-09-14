@@ -424,9 +424,10 @@ whitespace normalized, smart quotes folded) so the same line never enters twice.
 It also stores the evidence found for each item in `item_evidence`: for a
 passage cut from a public-domain text, the text's URL, the excerpt, its location
 and whether the book is by the attributed author. Candidates come only from a
-book's text after its first chapter or act heading (a book without one is
-skipped), and a Claude picker chooses among them by number; it never supplies
-text.
+book's own text: from its first chapter, stave or act heading (or its first book
+or part heading when it has none) up to any notes, appendix or index after it; a
+book without such a heading is skipped. A Claude picker chooses among them by
+number; it never supplies text.
 
 **`lantern verify --vertical literature`**
 Runs the attribution gates (§8) on each raw item's stored `item_evidence`.
@@ -517,8 +518,10 @@ makes "why did nothing post on Tuesday" answerable after the fact.
   (Oxford/Yale editions, a university page, the author's collected letters).
 - **Tier 3 alone is never enough.** Wikiquote is useful as a *lead generator* and
   especially useful for its "Misattributed" and "Disputed" sections — check
-  those explicitly and hard-reject anything appearing there. But a Wikiquote
-  entry is not, by itself, verification.
+  those explicitly and hard-reject anything appearing there (a quote of at least
+  five words that matches, contains, or is contained in a quotation listed in a
+  level-2 Misattributed or Disputed section of the author's page). But a
+  Wikiquote entry is not, by itself, verification.
 
 Quote aggregator sites (BrainyQuote, Goodreads quotes, AZQuotes and friends) are
 **banned as sources**. They are the primary vector for misattribution and they

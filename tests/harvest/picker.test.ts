@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { buildPickMessage, pickPassages, PickerResponseError, validatePicks, type PickFn } from '../../src/harvest/picker.js';
+import {
+  buildPickMessage,
+  PickerFailedError,
+  pickPassages,
+  PickerResponseError,
+  validatePicks,
+  type PickFn,
+} from '../../src/harvest/picker.js';
 
 const CANDIDATES = Array.from({ length: 6 }, (_, i) => `Sentence number ${i + 1} is a candidate cut from the book.`);
 const OPTIONS = { batchSize: 2, maxBatches: 2, picksPerBatch: 1 };
@@ -43,14 +50,25 @@ describe('picker', () => {
       ],
       batches: 2,
       failedBatches: 0,
+      failures: [],
     });
     expect(users[1]).toContain(`[1] ${CANDIDATES[2]}\n[2] ${CANDIDATES[3]}`);
   });
 
-  it('skips and counts a batch whose output is unusable', async () => {
+  it('skips a batch whose output is unusable and records why', async () => {
     let call = 0;
     const pick: PickFn = async () => (call++ === 0 ? { picks: [{ id: 9, reason: 'out of range' }] } : { picks: [] });
-    expect(await pickPassages(pick, 's', 'a', 'w', CANDIDATES, OPTIONS)).toEqual({ picked: [], batches: 2, failedBatches: 1 });
+    expect(await pickPassages(pick, 's', 'a', 'w', CANDIDATES, OPTIONS)).toEqual({
+      picked: [],
+      batches: 2,
+      failedBatches: 1,
+      failures: [{ start: 0, message: 'picker chose id 9, outside 1-2' }],
+    });
+  });
+
+  it('throws instead of reporting no picks when every batch was unusable', async () => {
+    const pick: PickFn = async () => ({ picks: 'none' });
+    await expect(pickPassages(pick, 's', 'a', 'A Tale of Two Cities', CANDIDATES, OPTIONS)).rejects.toThrow(PickerFailedError);
   });
 
   it('stops on any other error', async () => {

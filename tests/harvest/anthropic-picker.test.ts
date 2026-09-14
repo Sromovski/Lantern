@@ -45,7 +45,7 @@ async function fakeApi(replies: { status: number; body: unknown }[]) {
 }
 
 describe('anthropicPick', () => {
-  it('sends the model, the prompts and a JSON schema format, and returns the parsed picks', async () => {
+  it('sends the model, the prompts and a JSON schema format, and returns the parsed answer', async () => {
     const { client, requests } = await fakeApi([{ status: 200, body: message('{"picks":[{"id":2,"reason":"stands alone"}]}') }]);
     expect(await anthropicPick(client, 'claude-sonnet-5')('system prompt', 'user message')).toEqual({
       picks: [{ id: 2, reason: 'stands alone' }],
@@ -54,13 +54,13 @@ describe('anthropicPick', () => {
       model: 'claude-sonnet-5',
       system: 'system prompt',
       messages: [{ role: 'user', content: 'user message' }],
-      output_config: { format: { type: 'json_schema' }, effort: 'low' },
+      output_config: { format: { type: 'json_schema', schema: { type: 'object' } }, effort: 'low' },
     });
   });
 
-  it('turns output that does not parse, or a refusal, into a PickerResponseError', async () => {
+  it('turns an answer that is not JSON, or a refusal, into a PickerResponseError', async () => {
     const { client } = await fakeApi([
-      { status: 200, body: message('{"picks":"none"}') },
+      { status: 200, body: message('Here are my picks: 2') },
       { status: 200, body: message('', 'refusal') },
     ]);
     const pick = anthropicPick(client, 'claude-sonnet-5');
@@ -73,6 +73,17 @@ describe('anthropicPick', () => {
       { status: 401, body: { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } } },
     ]);
     await expect(anthropicPick(client, 'claude-sonnet-5')('s', 'u')).rejects.toThrow(Anthropic.AuthenticationError);
+  });
+
+  it('lets a failure to build the request through, so a missing key never reads as nothing quotable', async () => {
+    const broken = {
+      messages: {
+        create: () => Promise.reject(new Error('Could not resolve authentication method')),
+      },
+    } as unknown as Anthropic;
+    const rejection = anthropicPick(broken, 'claude-sonnet-5')('s', 'u');
+    await expect(rejection).rejects.toThrow('Could not resolve authentication method');
+    await expect(rejection).rejects.not.toBeInstanceOf(PickerResponseError);
   });
 
   it('loads the committed picker prompt', () => {

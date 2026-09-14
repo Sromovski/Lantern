@@ -13,6 +13,11 @@ export class PickerResponseError extends Error {
   override name = 'PickerResponseError';
 }
 
+/** Every batch sent for a work was unusable, which points at a broken setup rather than a dull book. */
+export class PickerFailedError extends Error {
+  override name = 'PickerFailedError';
+}
+
 export interface PickOptions {
   batchSize: number;
   maxBatches: number;
@@ -22,13 +27,21 @@ export interface PickOptions {
 export interface PickedPassage {
   /** The candidate sentence itself, never text from the model. */
   text: string;
+  /** The model's one-sentence reason: commentary for logs and review, never quote text. */
   reason: string;
+}
+
+export interface PickFailure {
+  /** Index of the batch's first candidate. */
+  start: number;
+  message: string;
 }
 
 export interface PickOutcome {
   picked: PickedPassage[];
   batches: number;
   failedBatches: number;
+  failures: PickFailure[];
 }
 
 export function buildPickMessage(author: string, work: string, batch: readonly string[], picksPerBatch: number): string {
@@ -60,8 +73,9 @@ export function validatePicks(raw: unknown, batchLength: number, picksPerBatch: 
 /**
  * Runs the picker over a work's candidates. When there are more batches than `maxBatches`, the
  * batches sent are spread evenly across the work instead of all coming from its opening. A batch
- * whose output is unusable (PickerResponseError) is counted and skipped; any other error, such as
- * authentication, network or rate limiting after the client's retries, stops the run.
+ * whose output is unusable (PickerResponseError) is recorded in `failures` and skipped; any other
+ * error, such as authentication, network or rate limiting after the client's retries, stops the run.
+ * If every batch sent was unusable, PickerFailedError is thrown instead of reporting no picks.
  */
 export async function pickPassages(
   pick: PickFn,
@@ -74,7 +88,7 @@ export async function pickPassages(
   const total = Math.ceil(candidates.length / options.batchSize);
   const count = Math.min(total, options.maxBatches);
   const picked: PickedPassage[] = [];
-  let failedBatches = 0;
+  const failures: PickFailure[] = [];
   for (let k = 0; k < count; k++) {
     const start = Math.floor((k * total) / count) * options.batchSize;
     const batch = candidates.slice(start, start + options.batchSize);
@@ -85,8 +99,11 @@ export async function pickPassages(
       }
     } catch (err) {
       if (!(err instanceof PickerResponseError)) throw err;
-      failedBatches++;
+      failures.push({ start, message: err.message });
     }
   }
-  return { picked, batches: count, failedBatches };
+  if (count > 0 && failures.length === count) {
+    throw new PickerFailedError(`every picker batch for ${work} was unusable; first: ${failures[0]!.message}`);
+  }
+  return { picked, batches: count, failedBatches: failures.length, failures };
 }
