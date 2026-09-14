@@ -26,3 +26,4 @@ harvest:
     model: claude-sonnet-5        # user's choice, 2026-09-13
     batch_size: 150               # candidates per Claude call (~45 input tokens each)
     max_batches_per_work: 6       # spend cap per book
+    picks_per_batch: 3            # most sentences the model may choose from one batch

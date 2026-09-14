@@ -9,7 +9,7 @@ const valid = {
   authors: [
     { name: 'Charles Dickens', gutendex_name: 'Dickens, Charles', wikidata_id: 'Q5686', birth_year: 1812, death_year: 1870 },
   ],
-  picker: { model: 'claude-sonnet-5', batch_size: 150, max_batches_per_work: 6 },
+  picker: { model: 'claude-sonnet-5', batch_size: 150, max_batches_per_work: 6, picks_per_batch: 3 },
 };
 
 describe('harvest config', () => {
@@ -22,7 +22,7 @@ describe('harvest config', () => {
       'Twain, Mark',
       'Wilde, Oscar',
     ]);
-    expect(literature?.harvest?.picker).toEqual({ model: 'claude-sonnet-5', batch_size: 150, max_batches_per_work: 6 });
+    expect(literature?.harvest?.picker).toEqual({ model: 'claude-sonnet-5', batch_size: 150, max_batches_per_work: 6, picks_per_batch: 3 });
   });
 
   it('accepts a valid harvest section', () => {

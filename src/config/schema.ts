@@ -25,6 +25,7 @@ export const harvestSchema = z.strictObject({
     model: z.string().min(1),
     batch_size: z.number().int().min(10).max(500),
     max_batches_per_work: z.number().int().min(1).max(50),
+    picks_per_batch: z.number().int().min(1).max(10),
   }),
 });
 
