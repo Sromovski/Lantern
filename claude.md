@@ -161,6 +161,9 @@ lantern/
       renditions/       # composed output, by post id / format
     cache/              # raw API responses, hashed by request; full Gutenberg texts in gutenberg-text/
   migrations/
+  prompts/
+    literature/
+      pick.md           # passage picker system prompt; the model chooses by number
   src/
     cli.ts              # entry point, subcommands
     config/             # vertical/channel YAML schemas + loader
@@ -420,7 +423,10 @@ rows with `status='raw'`. Dedupes on `body_hash` (lowercased, punctuation and
 whitespace normalized, smart quotes folded) so the same line never enters twice.
 It also stores the evidence found for each item in `item_evidence`: for a
 passage cut from a public-domain text, the text's URL, the excerpt, its location
-and whether the book is by the attributed author.
+and whether the book is by the attributed author. Candidates come only from a
+book's text after its first chapter or act heading (a book without one is
+skipped), and a Claude picker chooses among them by number; it never supplies
+text.
 
 **`lantern verify --vertical literature`**
 Runs the attribution gates (§8) on each raw item's stored `item_evidence`.

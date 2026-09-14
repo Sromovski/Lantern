@@ -2764,6 +2764,8 @@ Every milestone below follows the same opening ritual:
 
 ### Phase 2 remainder — literature content end to end, no publishing
 
+> **Status:** the front-matter cut (P1 from the harvest-core final review), the Claude passage picker (`claude-sonnet-5`, structured output, prompt in `prompts/literature/pick.md`) and the Wikiquote Misattributed/Disputed parser (2.2) are built and tested offline on branch `phase-2-picker` (docs/plans/phase-2-picker.md, Tasks L1-L5). The `lantern harvest` and `lantern verify` commands, with their network fetches, subject rows and evidence inserts, come next.
+
 *Done when (spec §14):* 20 finished literature posts exist on disk in `square` and `pin` that you would be happy to publish.
 
 **2.1 Gutendex harvester** — `src/harvest/gutendex.ts`
