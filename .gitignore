@@ -6,3 +6,6 @@ data/lantern.db-*
 data/media/
 logs/
 data/cache/**/*.tmp
+
+# Full Project Gutenberg texts (~800 KB each) are cached locally but never committed.
+data/cache/gutenberg-text/

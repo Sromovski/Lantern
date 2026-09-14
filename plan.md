@@ -2719,6 +2719,8 @@ below, not later.
 
 > **Status:** the **Tier 1/2 host allowlists** row is done for tier 1 hosts and for scholarly `authorMatches` on branch `phase-2-guardrails` (Tasks G1-G2); a curated scholarly host allowlist remains for 2.2. From **Unattended retry visibility**, the doctor `LANTERN_CONTACT` check (Task G3) and the `onRetry` hook (Task G4) are done; the run deadline and the retry log line remain for Phase 5. `paths.cache` and `paths.media` exist (Task G5), and `DownloadStatusError` reports `finalUrl` (Task G4).
 
+> **Status:** the **Canonical quote body** row is decided by the user (2026-09-13: the item body is the verbatim source passage, whitespace tidied only; spec section 8), and the size-policy part of **Novel-sized fixtures** is done (full Gutenberg texts cache under `data/cache/gutenberg-text/`, which git ignores; tests use small inline texts), on branch `phase-2-harvest` (docs/plans/phase-2-harvest-core.md, Tasks K1-K6). `hasGutenbergEndMarker` exists for the END-marker `cacheable` hook, which the next plan wires into the text fetch.
+
 The whole-branch review of Part B found issues that are real but out of scope for
 the F1–F7 fix wave. They are not forgotten — they must land before the milestone
 named below, not later.

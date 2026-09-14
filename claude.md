@@ -281,6 +281,19 @@ CREATE TABLE sources (
   retrieved_at  TEXT NOT NULL
 );
 
+-- Evidence gathered by harvest and read back by verify. One row per piece of evidence.
+CREATE TABLE item_evidence (
+  id             INTEGER PRIMARY KEY,
+  item_id        INTEGER NOT NULL REFERENCES items(id),
+  kind           TEXT NOT NULL,         -- 'primary-text'|'scholarly'|'reference'|'listed-misattributed'|'attribution-conflict'
+  citation       TEXT NOT NULL,
+  url            TEXT,
+  excerpt        TEXT,
+  author_matches INTEGER,               -- primary-text and scholarly evidence only
+  other_author   TEXT,                  -- attribution-conflict evidence only
+  recorded_at    TEXT NOT NULL
+);
+
 -- Source imagery, before composition.
 CREATE TABLE images (
   id            INTEGER PRIMARY KEY,
@@ -480,10 +493,12 @@ makes "why did nothing post on Tuesday" answerable after the fact.
 
 - **Tier 1:** The exact string (normalized) is located in a public-domain
   full text — Project Gutenberg via the Gutendex API, Standard Ebooks, or
-  Wikisource. Store the work, the location, and the matched excerpt. This is the
-  strongest evidence and the preferred path. Prefer harvesting *from* the texts
-  themselves rather than from quote sites; a passage pulled out of Bleak House
-  is verified by construction.
+  Wikisource. Store the work, the location, and the matched excerpt. The item
+  body is that passage exactly as the source prints it, with only whitespace
+  tidied; punctuation, typography and spelling are never normalized for
+  publication. This is the strongest evidence and the preferred path. Prefer
+  harvesting *from* the texts themselves rather than from quote sites; a
+  passage pulled out of Bleak House is verified by construction.
 - **Tier 2:** Attested in a scholarly or editorial source with a citation
   (Oxford/Yale editions, a university page, the author's collected letters).
 - **Tier 3 alone is never enough.** Wikiquote is useful as a *lead generator* and
@@ -501,8 +516,10 @@ migrations 002-004 as a best-effort backstop for writes that bypass that code. A
 tier 1 source must also be the URL of its full text on Project Gutenberg,
 Standard Ebooks or Wikisource (`PRIMARY_TEXT_DOMAINS`, enforced in TypeScript
 only; archive and proxy copies do not count), and scholarly evidence verifies a
-quote only when it attributes the quote to the same author. If any usable source
-names a different author, the quote is rejected as an attribution conflict.
+quote only when it attributes the quote to the same author. If a usable source
+names a different author, the quote is rejected: as an attribution conflict when
+another usable source names the attributed author, and as an author mismatch
+otherwise.
 
 Additional hard rejects: quotes attributed to an author who died before the
 phrasing existed; any quote whose earliest traceable appearance is post-1990
