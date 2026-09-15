@@ -49,9 +49,11 @@ function findVertical(db: Db, slug: string) {
 
 function describeAuthor(author: AuthorReport): string {
   if (author.error !== null) return `${author.author}: skipped (${author.error})`;
+  if (!author.loaded) return `${author.author}: not reached before the limit`;
   const count = (status: string) => author.books.filter((b) => b.outcome.status === status).length;
-  const inserted = author.books.reduce((n, b) => n + (b.outcome.status === 'harvested' ? b.outcome.inserted : 0), 0);
-  return `${author.author}: ${author.listedEntries} listed on Wikiquote; books harvested ${count('harvested')}, already picked ${count('already-picked')}, skipped ${count('skipped')}, failed ${count('failed')}; quotes inserted ${inserted}`;
+  const sum = (key: 'inserted' | 'conflicts' | 'conflictsWithDecided') =>
+    author.books.reduce((n, b) => n + (b.outcome.status === 'harvested' ? b.outcome[key] : 0), 0);
+  return `${author.author}: ${author.listedEntries} listed on Wikiquote; books harvested ${count('harvested')}, already picked ${count('already-picked')}, skipped ${count('skipped')}, failed ${count('failed')}; quotes inserted ${sum('inserted')}; attribution conflicts ${sum('conflicts')} recorded, ${sum('conflictsWithDecided')} with decided quotes`;
 }
 
 program
@@ -69,7 +71,7 @@ program
 
 program
   .command('harvest')
-  .description('Pull raw quotes from public-domain texts for a vertical; exits 1 if an author was skipped or a book failed')
+  .description('Pull raw quotes from public-domain texts for a vertical; exits 1 if an author was skipped, a book failed, or a passage clashes with a decided quote')
   .requiredOption('--vertical <slug>', 'the vertical to harvest')
   .option('--limit <n>', 'start no new book once this many quotes have been inserted', '25')
   .option('--refresh', 'ignore cached responses and fetch again')
@@ -109,7 +111,11 @@ program
     );
     for (const author of report.authors) console.log(describeAuthor(author));
     console.log(`inserted: ${report.inserted}`);
-    const trouble = report.authors.some((a) => a.error !== null || a.books.some((b) => b.outcome.status === 'failed'));
+    const trouble = report.authors.some(
+      (a) =>
+        a.error !== null ||
+        a.books.some((b) => b.outcome.status === 'failed' || (b.outcome.status === 'harvested' && b.outcome.conflictsWithDecided > 0)),
+    );
     if (trouble) process.exitCode = 1;
   });
 

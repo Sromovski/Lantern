@@ -14,8 +14,10 @@ import {
   wikiquoteListedSections,
   type Endpoints,
 } from '../../src/harvest/sources.js';
+import { WikiquotePageError } from '../../src/verify/wikiquote.js';
 
 const UA = 'Lantern/test (test@example.invalid)';
+const NOW = () => new Date('2026-09-15T00:00:00.000Z');
 const DICKENS: HarvestAuthor = { name: 'Charles Dickens', gutendex_name: 'Dickens, Charles', wikidata_id: 'Q5686', birth_year: 1812, death_year: 1870 };
 const TEXT = [
   '*** START OF THE PROJECT GUTENBERG EBOOK A TALE OF TWO CITIES ***',
@@ -26,6 +28,7 @@ const TEXT = [
   '',
   '*** END OF THE PROJECT GUTENBERG EBOOK A TALE OF TWO CITIES ***',
 ].join('\r\n');
+const DICKENS_PAGE = '/w/api.php?action=parse&format=json&formatversion=2&prop=wikitext&redirects=1&page=Charles_Dickens';
 
 interface Route {
   status?: number;
@@ -104,15 +107,18 @@ describe('harvest sources', () => {
     expect(hits).toEqual(['/books/?languages=en&search=dickens', '/books/?languages=en&page=2&search=dickens']);
   });
 
-  it('refuses a Gutendex page that is not the recorded shape, or a next link to another origin', async () => {
-    const { origin } = await site({
+  it('refuses a Gutendex page that is not the recorded shape, without caching it, or a next link to another origin', async () => {
+    const { origin, hits } = await site({
       '/books/?languages=en&search=dickens': { body: JSON.stringify({ count: 1, next: 'https://elsewhere.example/books/?page=2', previous: null, results: [] }) },
-      '/books/?languages=en&search=twain': { body: JSON.stringify({ results: 'none' }) },
+      '/books/?languages=en&search=twain': { body: JSON.stringify({ detail: 'Too many requests' }) },
     });
     const get = createHttpGet({ cacheDir, http: { userAgent: UA }, secretValues: [] });
     const endpoints: Endpoints = { gutendex: origin, wikiquote: origin };
     await expect(gutendexBooks(get, endpoints, DICKENS)).rejects.toThrow('leaves');
-    await expect(gutendexBooks(get, endpoints, { ...DICKENS, gutendex_name: 'Twain, Mark' })).rejects.toThrow(ZodError);
+    const twain = { ...DICKENS, gutendex_name: 'Twain, Mark' };
+    await expect(gutendexBooks(get, endpoints, twain)).rejects.toThrow(ZodError);
+    await expect(gutendexBooks(get, endpoints, twain)).rejects.toThrow(ZodError);
+    expect(hits.filter((h) => h.includes('search=twain'))).toHaveLength(2);
   });
 
   it('caches only a complete book text and cites a text that is not on a primary-text host as nothing', async () => {
@@ -137,17 +143,34 @@ describe('harvest sources', () => {
     });
   });
 
-  it('reads the listed sections of the author page from one Wikiquote request', async () => {
+  it('reads the listed sections of the author page from one Wikiquote request, with the time it was fetched', async () => {
     const page = { parse: { title: 'Charles Dickens', wikitext: '== Quotes ==\n* A quote.\n==Misattributed==\n* Every one for himself, and Providence for us all.' } };
+    const { origin, hits } = await site({ [DICKENS_PAGE]: { body: JSON.stringify(page) } });
+    const get = createHttpGet({ cacheDir, http: { userAgent: UA }, secretValues: [], now: NOW });
+    expect(await wikiquoteListedSections(get, { gutendex: origin, wikiquote: origin }, 'Charles Dickens')).toEqual({
+      sections: [
+        { title: 'Charles Dickens', kind: 'Misattributed', anchor: 'Misattributed', entries: ['Every one for himself, and Providence for us all.'] },
+      ],
+      fetchedAt: '2026-09-15T00:00:00.000Z',
+    });
+    expect(hits).toHaveLength(1);
+  });
+
+  it('refuses a Wikiquote page that resolves to another title, and does not cache an error answered with 200', async () => {
     const { origin, hits } = await site({
-      '/w/api.php?action=parse&format=json&formatversion=2&prop=wikitext&page=Charles_Dickens': { body: JSON.stringify(page) },
+      '/w/api.php?action=parse&format=json&formatversion=2&prop=wikitext&redirects=1&page=Samuel_Clemens': {
+        body: JSON.stringify({ parse: { title: 'Mark Twain', wikitext: '==Misattributed==\n* A listed quotation of some length here.' } }),
+      },
+      '/w/api.php?action=parse&format=json&formatversion=2&prop=wikitext&redirects=1&page=Nobody': {
+        body: JSON.stringify({ error: { code: 'missingtitle', info: "The page you specified doesn't exist." } }),
+      },
     });
     const get = createHttpGet({ cacheDir, http: { userAgent: UA }, secretValues: [] });
-    const sections = await wikiquoteListedSections(get, { gutendex: origin, wikiquote: origin }, 'Charles Dickens');
-    expect(sections).toEqual([
-      { title: 'Charles Dickens', kind: 'Misattributed', anchor: 'Misattributed', entries: ['Every one for himself, and Providence for us all.'] },
-    ]);
-    expect(hits).toHaveLength(1);
+    const endpoints = { gutendex: origin, wikiquote: origin };
+    await expect(wikiquoteListedSections(get, endpoints, 'Samuel Clemens')).rejects.toThrow(WikiquotePageError);
+    await expect(wikiquoteListedSections(get, endpoints, 'Nobody')).rejects.toThrow(ZodError);
+    await expect(wikiquoteListedSections(get, endpoints, 'Nobody')).rejects.toThrow(ZodError);
+    expect(hits.filter((h) => h.endsWith('page=Nobody'))).toHaveLength(2);
   });
 
   it('fails on a source that does not answer 200', async () => {

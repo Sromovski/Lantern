@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ZodError } from 'zod';
-import { cleanWikitext, listedEvidence, listedSections, type ListedSection } from '../../src/verify/wikiquote.js';
+import { cleanWikitext, listedEvidence, listedSections, WikiquotePageError, type ListedSection } from '../../src/verify/wikiquote.js';
 
 // Trimmed from en.wikiquote.org page wikitext (2026-09-13/14). Wikiquote text is CC BY-SA 4.0.
 const WILDE = {
@@ -75,6 +75,13 @@ describe('wikiquote', () => {
   it('returns no sections for a page without them, and refuses a response that is not the recorded shape', () => {
     expect(listedSections({ parse: { title: 'Somebody', wikitext: '== Quotes ==\n* A quote.' } })).toEqual([]);
     expect(() => listedSections({ error: { code: 'missingtitle', info: 'The page you specified does not exist.' } })).toThrow(ZodError);
+  });
+
+  it('refuses a redirect page and a listed section heading it does not recognise', () => {
+    expect(() => listedSections({ parse: { title: 'Samuel Clemens', wikitext: '#REDIRECT [[Mark Twain]]' } })).toThrow(WikiquotePageError);
+    expect(() =>
+      listedSections({ parse: { title: 'Somebody', wikitext: '== Quotes ==\n* A quote.\n== Misattributed quotes ==\n* A listed quotation of some length.' } }),
+    ).toThrow(WikiquotePageError);
   });
 
   it('reduces wikitext markup to its visible text', () => {

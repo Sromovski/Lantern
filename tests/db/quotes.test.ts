@@ -11,9 +11,12 @@ import {
   type HarvestedQuote,
 } from '../../src/db/quotes.js';
 import type { HarvestAuthor } from '../../src/harvest/gutendex.js';
+import type { QuoteEvidence } from '../../src/verify/quote-gate.js';
+import { verifyVertical } from '../../src/verify/run.js';
 import { seedItem, testDb } from '../helpers/db.js';
 
 const NOW = new Date('2026-09-15T00:00:00.000Z');
+const FETCHED = '2026-09-14T12:00:00.000Z';
 const DICKENS: HarvestAuthor = {
   name: 'Charles Dickens',
   gutendex_name: 'Dickens, Charles',
@@ -21,7 +24,17 @@ const DICKENS: HarvestAuthor = {
   birth_year: 1812,
   death_year: 1870,
 };
+const AUSTEN: HarvestAuthor = { name: 'Jane Austen', gutendex_name: 'Austen, Jane', wikidata_id: 'Q36322', birth_year: 1775, death_year: 1817 };
 const BODY = 'A wonderful fact to reflect upon, that every human creature is constituted to be that profound secret and mystery to every other.';
+
+const primary = (citation: string): QuoteEvidence => ({
+  kind: 'primary-text',
+  citation,
+  url: 'https://www.gutenberg.org/cache/epub/98/pg98.txt',
+  excerpt: BODY,
+  location: 'characters 120450-120580 after the Project Gutenberg header',
+  authorMatches: true,
+});
 
 function setup() {
   const db = testDb();
@@ -33,19 +46,12 @@ function setup() {
   const quote: HarvestedQuote = {
     verticalId,
     subjectId,
+    author: 'Charles Dickens',
     body: BODY,
     workTitle: 'A Tale of Two Cities',
-    evidence: [
-      {
-        kind: 'primary-text',
-        citation: 'Charles Dickens, A Tale of Two Cities (Project Gutenberg #98)',
-        url: 'https://www.gutenberg.org/cache/epub/98/pg98.txt',
-        excerpt: BODY,
-        location: 'characters 120450-120580',
-        authorMatches: true,
-      },
-    ],
+    evidence: [primary('Charles Dickens, A Tale of Two Cities (Project Gutenberg #98)')],
     wikiquotePage: 'Charles Dickens',
+    wikiquoteCheckedAt: FETCHED,
   };
   return { db, verticalId, subjectId, quote };
 }
@@ -69,10 +75,15 @@ describe('harvest rows', () => {
     expect(() => upsertAuthorSubject(db, verticalId, { ...DICKENS, wikidata_id: 'Q99999' }, NOW)).toThrow(SubjectConflictError);
   });
 
+  it('refuses a second name for a Wikidata id that already has a subject', () => {
+    const { db, verticalId } = setup();
+    expect(() => upsertAuthorSubject(db, verticalId, { ...DICKENS, name: 'Boz' }, NOW)).toThrow(SubjectConflictError);
+  });
+
   it('inserts a raw quote with its evidence and its Wikiquote check in one step', () => {
     const { db, quote } = setup();
-    const { itemId, inserted } = insertHarvestedQuote(db, quote, NOW);
-    expect(inserted).toBe(true);
+    const { itemId, inserted, conflict } = insertHarvestedQuote(db, quote, NOW);
+    expect([inserted, conflict]).toEqual([true, 'none']);
     expect(db.prepare('SELECT kind, body, work_title, status, subject_id FROM items WHERE id = ?').get(itemId)).toEqual({
       kind: 'quote',
       body: BODY,
@@ -82,15 +93,40 @@ describe('harvest rows', () => {
     });
     expect(loadEvidence(db, itemId)).toEqual(quote.evidence);
     expect(hasWikiquoteCheck(db, itemId)).toBe(true);
+    expect(db.prepare('SELECT checked_at FROM quote_checks WHERE item_id = ?').pluck().get(itemId)).toBe(FETCHED);
   });
 
-  it('leaves an existing item alone when the same passage is harvested again', () => {
+  it('leaves the same author\'s existing item alone when the same passage is harvested again', () => {
     const { db, quote } = setup();
     const first = insertHarvestedQuote(db, quote, NOW);
     const again = insertHarvestedQuote(db, { ...quote, body: BODY.toUpperCase(), workTitle: 'Another edition' }, NOW);
-    expect(again).toEqual({ itemId: first.itemId, inserted: false });
+    expect(again).toEqual({ itemId: first.itemId, inserted: false, conflict: 'none' });
     expect(db.prepare('SELECT COUNT(*) FROM item_evidence WHERE item_id = ?').pluck().get(first.itemId)).toBe(1);
     expect(db.prepare('SELECT COUNT(*) FROM quote_checks WHERE item_id = ?').pluck().get(first.itemId)).toBe(1);
+  });
+
+  it('records an attribution conflict when another author\'s book has the same passage, so verify rejects it', () => {
+    const { db, verticalId, quote } = setup();
+    const first = insertHarvestedQuote(db, quote, NOW);
+    const austen = upsertAuthorSubject(db, verticalId, AUSTEN, NOW);
+    const clash = insertHarvestedQuote(
+      db,
+      { ...quote, subjectId: austen, author: 'Jane Austen', workTitle: 'Emma', evidence: [primary('Jane Austen, Emma (Project Gutenberg #158)')], wikiquotePage: 'Jane Austen' },
+      NOW,
+    );
+    expect(clash).toEqual({ itemId: first.itemId, inserted: false, conflict: 'recorded' });
+    expect(loadEvidence(db, first.itemId).map((e) => e.kind)).toEqual(['primary-text', 'attribution-conflict']);
+    expect(verifyVertical(db, verticalId, { now: () => NOW })).toMatchObject({ verified: 0, rejected: { 'attribution-conflict': 1 } });
+  });
+
+  it('reports, without writing, a clash with another author\'s item that was already decided', () => {
+    const { db, verticalId, quote } = setup();
+    const first = insertHarvestedQuote(db, quote, NOW);
+    expect(verifyVertical(db, verticalId, { now: () => NOW })).toMatchObject({ verified: 1 });
+    const austen = upsertAuthorSubject(db, verticalId, AUSTEN, NOW);
+    const clash = insertHarvestedQuote(db, { ...quote, subjectId: austen, author: 'Jane Austen', workTitle: 'Emma' }, NOW);
+    expect(clash).toEqual({ itemId: first.itemId, inserted: false, conflict: 'decided' });
+    expect(db.prepare('SELECT COUNT(*) FROM item_evidence WHERE item_id = ?').pluck().get(first.itemId)).toBe(1);
   });
 
   it('reports no Wikiquote check for an item inserted another way, and refuses unknown check names', () => {

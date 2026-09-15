@@ -16,12 +16,14 @@ const UA = 'Lantern/test (test@example.invalid)';
 const NOW = () => new Date('2026-09-15T00:00:00.000Z');
 const LISTED = 'Well, every one for himself, and Providence for us all, as the elephant said when he danced among the chickens.';
 const WORDS = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'twenty-one'];
-const PROSE = WORDS.map((w) => `Sentence ${w} tells of the river and the town and the people who lived beside it.`);
+const prose = (tag = '') => WORDS.map((w) => `Sentence ${w}${tag} tells of the river and the town and the people who lived beside it.`);
+const PROSE = prose();
 
-const HARVEST: HarvestConfig = {
-  authors: [{ name: 'Charles Dickens', gutendex_name: 'Dickens, Charles', wikidata_id: 'Q5686', birth_year: 1812, death_year: 1870 }],
-  picker: { model: 'claude-sonnet-5', batch_size: 150, max_batches_per_work: 6, picks_per_batch: 3 },
-};
+const DICKENS = { name: 'Charles Dickens', gutendex_name: 'Dickens, Charles', wikidata_id: 'Q5686', birth_year: 1812, death_year: 1870 };
+const AUSTEN = { name: 'Jane Austen', gutendex_name: 'Austen, Jane', wikidata_id: 'Q36322', birth_year: 1775, death_year: 1817 };
+const TWAIN = { name: 'Mark Twain', gutendex_name: 'Twain, Mark', wikidata_id: 'Q7245', birth_year: 1835, death_year: 1910 };
+const PICKER = { model: 'claude-sonnet-5', batch_size: 150, max_batches_per_work: 6, picks_per_batch: 3 };
+const HARVEST: HarvestConfig = { authors: [DICKENS], picker: PICKER };
 
 const gutenberg = (title: string, lines: string[]) =>
   [
@@ -47,20 +49,28 @@ const NOVEL = gutenberg('A Tale of Two Cities', [
   'Obvious printing errors in this edition have been corrected by the transcriber without comment.',
 ]);
 
-const book = (id: number, title: string, textUrl: string, authors = HARVEST.authors.map((a) => ({ name: a.gutendex_name, birth_year: a.birth_year, death_year: a.death_year }))) => ({
-  id,
-  title,
-  authors,
-  editors: [],
-  translators: [],
-  subjects: [],
-  bookshelves: [],
-  languages: ['en'],
-  copyright: false,
-  media_type: 'Text',
-  formats: { 'text/plain; charset=utf-8': textUrl },
-  download_count: 1,
-});
+const bookBy =
+  (author: { gutendex_name: string; birth_year: number; death_year: number }) =>
+  (id: number, title: string, textUrl: string, authors = [{ name: author.gutendex_name, birth_year: author.birth_year, death_year: author.death_year }]) => ({
+    id,
+    title,
+    authors,
+    editors: [],
+    translators: [],
+    subjects: [],
+    bookshelves: [],
+    languages: ['en'],
+    copyright: false,
+    media_type: 'Text',
+    formats: { 'text/plain; charset=utf-8': textUrl },
+    download_count: 1,
+  });
+const book = bookBy(DICKENS);
+
+const page = (results: unknown[]) => ({ body: JSON.stringify({ count: results.length, next: null, previous: null, results }) });
+const text = (body: string) => ({ type: 'text/plain; charset=utf-8', body });
+const wikiquotePath = (title: string) => `/w/api.php?action=parse&format=json&formatversion=2&prop=wikitext&redirects=1&page=${title.replace(/ /g, '_')}`;
+const wikiquote = (title: string, wikitext = '== Quotes ==\n* A quote.') => ({ body: JSON.stringify({ parse: { title, wikitext } }) });
 
 const WIKIQUOTE_PAGE = {
   parse: {
@@ -69,7 +79,8 @@ const WIKIQUOTE_PAGE = {
   },
 };
 
-const WIKIQUOTE_PATH = '/w/api.php?action=parse&format=json&formatversion=2&prop=wikitext&page=Charles_Dickens';
+const WIKIQUOTE_PATH = wikiquotePath('Charles Dickens');
+const DICKENS_WIKIQUOTE = { body: JSON.stringify(WIKIQUOTE_PAGE) };
 const SEARCH_PATH = '/books/?languages=en&search=dickens';
 
 const servers: Server[] = [];
@@ -130,7 +141,7 @@ async function setup(routes: Record<string, { type?: string; body: string }>, pi
     db,
     verticalId,
     harvest: HARVEST,
-    get: createHttpGet({ cacheDir, http: { userAgent: UA, fetchImpl: routedTo(origin) }, secretValues: [] }),
+    get: createHttpGet({ cacheDir, http: { userAgent: UA, fetchImpl: routedTo(origin) }, secretValues: [], now: NOW }),
     endpoints,
     pick,
     prompt: 'You can only choose by number.',
@@ -142,22 +153,15 @@ async function setup(routes: Record<string, { type?: string; body: string }>, pi
 }
 
 const standardRoutes = {
-  [WIKIQUOTE_PATH]: { body: JSON.stringify(WIKIQUOTE_PAGE) },
-  [SEARCH_PATH]: {
-    body: JSON.stringify({
-      count: 2,
-      next: null,
-      previous: null,
-      results: [
-        book(98, 'A Tale of Two Cities', 'https://www.gutenberg.org/ebooks/98.txt.utf-8'),
-        book(3178, 'The Gilded Age', 'https://www.gutenberg.org/ebooks/3178.txt.utf-8', [
-          { name: 'Dickens, Charles', birth_year: 1812, death_year: 1870 },
-          { name: 'Warner, Charles Dudley', birth_year: 1829, death_year: 1900 },
-        ]),
-      ],
-    }),
-  },
-  '/ebooks/98.txt.utf-8': { type: 'text/plain; charset=utf-8', body: NOVEL },
+  [WIKIQUOTE_PATH]: DICKENS_WIKIQUOTE,
+  [SEARCH_PATH]: page([
+    book(98, 'A Tale of Two Cities', 'https://www.gutenberg.org/ebooks/98.txt.utf-8'),
+    book(3178, 'The Gilded Age', 'https://www.gutenberg.org/ebooks/3178.txt.utf-8', [
+      { name: 'Dickens, Charles', birth_year: 1812, death_year: 1870 },
+      { name: 'Warner, Charles Dudley', birth_year: 1829, death_year: 1900 },
+    ]),
+  ]),
+  '/ebooks/98.txt.utf-8': text(NOVEL),
 };
 
 describe('harvestVertical', () => {
@@ -169,13 +173,23 @@ describe('harvestVertical', () => {
     expect(report.authors).toEqual([
       {
         author: 'Charles Dickens',
+        loaded: true,
         error: null,
         listedEntries: 1,
         books: [
           {
             gutenbergId: 98,
             title: 'A Tale of Two Cities',
-            outcome: expect.objectContaining({ status: 'harvested', heading: 'CHAPTER I.', picked: 2, inserted: 2, duplicates: 0, listed: 1 }),
+            outcome: expect.objectContaining({
+              status: 'harvested',
+              heading: 'CHAPTER I.',
+              picked: 2,
+              inserted: 2,
+              duplicates: 0,
+              listed: 1,
+              conflicts: 0,
+              conflictsWithDecided: 0,
+            }),
           },
         ],
       },
@@ -195,6 +209,7 @@ describe('harvestVertical', () => {
     expect(primary).toHaveProperty('location', expect.stringMatching(/^characters \d+-\d+ after the Project Gutenberg header$/));
     expect(loadEvidence(db, items[1]!.id).map((e) => e.kind)).toEqual(['primary-text', 'listed-misattributed']);
     expect(JSON.stringify(db.prepare('SELECT body FROM items').pluck().all())).not.toContain('editor');
+    expect(db.prepare('SELECT checked_at FROM quote_checks').pluck().all()).toEqual(['2026-09-15T00:00:00.000Z', '2026-09-15T00:00:00.000Z']);
 
     expect(verifyVertical(db, verticalId, { now: NOW })).toEqual({
       considered: 2,
@@ -223,25 +238,69 @@ describe('harvestVertical', () => {
   it('skips an author whose Wikiquote page cannot be read, before any book is fetched', async () => {
     const { db, hits, options } = await setup({ [SEARCH_PATH]: standardRoutes[SEARCH_PATH] }, pickWhere(() => true));
     const report = await harvestVertical(options);
-    expect(report.authors[0]).toMatchObject({ author: 'Charles Dickens', error: expect.stringContaining('HTTP 404'), books: [] });
+    expect(report.authors[0]).toMatchObject({ author: 'Charles Dickens', loaded: false, error: expect.stringContaining('HTTP 404'), books: [] });
     expect(hits.some((h) => h.startsWith('/books/'))).toBe(false);
     expect(db.prepare('SELECT COUNT(*) FROM items').pluck().get()).toBe(0);
+  });
+
+  it('gives authors turns, one book each per round, and keeps going past an author that cannot be read', async () => {
+    const austenBook = bookBy(AUSTEN);
+    const routes = {
+      [wikiquotePath('Mark Twain')]: { body: JSON.stringify({ parse: { title: 'Samuel Clemens', wikitext: '#REDIRECT [[Mark Twain]]' } }) },
+      [WIKIQUOTE_PATH]: wikiquote('Charles Dickens'),
+      [wikiquotePath('Jane Austen')]: wikiquote('Jane Austen'),
+      [SEARCH_PATH]: page([
+        book(98, 'A Tale of Two Cities', 'https://www.gutenberg.org/ebooks/98.txt.utf-8'),
+        book(1400, 'Great Expectations', 'https://www.gutenberg.org/ebooks/1400.txt.utf-8'),
+      ]),
+      '/books/?languages=en&search=austen': page([
+        austenBook(158, 'Emma', 'https://www.gutenberg.org/ebooks/158.txt.utf-8'),
+        austenBook(1342, 'Pride and Prejudice', 'https://www.gutenberg.org/ebooks/1342.txt.utf-8'),
+      ]),
+      '/ebooks/98.txt.utf-8': text(gutenberg('A Tale of Two Cities', ['CHAPTER I.', '', ...prose(' of the first novel')])),
+      '/ebooks/1400.txt.utf-8': text(gutenberg('Great Expectations', ['CHAPTER I.', '', ...prose(' of the second novel')])),
+      '/ebooks/158.txt.utf-8': text(gutenberg('Emma', ['CHAPTER I', '', ...prose(' of the third novel')])),
+      '/ebooks/1342.txt.utf-8': text(gutenberg('Pride and Prejudice', ['Chapter I.', '', ...prose(' of the fourth novel')])),
+    };
+    const { hits, options } = await setup(routes, pickWhere((t) => t.startsWith('Sentence one ')), {
+      harvest: { authors: [TWAIN, DICKENS, AUSTEN], picker: PICKER },
+    });
+    const report = await harvestVertical(options);
+    expect(report.inserted).toBe(4);
+    expect(report.authors.map((a) => [a.author, a.loaded, a.books.map((b) => b.gutenbergId)])).toEqual([
+      ['Mark Twain', false, []],
+      ['Charles Dickens', true, [98, 1400]],
+      ['Jane Austen', true, [158, 1342]],
+    ]);
+    expect(report.authors[0]!.error).toContain('Samuel Clemens');
+    expect(hits.filter((h) => h.startsWith('/ebooks/'))).toEqual(['/ebooks/98.txt.utf-8', '/ebooks/158.txt.utf-8', '/ebooks/1400.txt.utf-8', '/ebooks/1342.txt.utf-8']);
+  });
+
+  it('records an attribution conflict when another author\'s book has a passage already harvested, so verify rejects it', async () => {
+    const routes = {
+      [WIKIQUOTE_PATH]: wikiquote('Charles Dickens'),
+      [wikiquotePath('Jane Austen')]: wikiquote('Jane Austen'),
+      [SEARCH_PATH]: page([book(98, 'A Tale of Two Cities', 'https://www.gutenberg.org/ebooks/98.txt.utf-8')]),
+      '/books/?languages=en&search=austen': page([bookBy(AUSTEN)(158, 'Emma', 'https://www.gutenberg.org/ebooks/158.txt.utf-8')]),
+      '/ebooks/98.txt.utf-8': text(NOVEL),
+      '/ebooks/158.txt.utf-8': text(gutenberg('Emma', ['CHAPTER I', '', ...PROSE])),
+    };
+    const { db, verticalId, options } = await setup(routes, pickWhere((t) => t.startsWith('Sentence one ')), {
+      harvest: { authors: [DICKENS, AUSTEN], picker: PICKER },
+    });
+    const report = await harvestVertical(options);
+    expect(report.inserted).toBe(1);
+    expect(report.authors[1]!.books[0]!.outcome).toMatchObject({ status: 'harvested', inserted: 0, conflicts: 1 });
+    expect(verifyVertical(db, verticalId, { now: NOW })).toMatchObject({ verified: 0, rejected: { 'attribution-conflict': 1 } });
   });
 
   it('starts no new book once the limit is reached', async () => {
     const routes = {
       ...standardRoutes,
-      [SEARCH_PATH]: {
-        body: JSON.stringify({
-          count: 2,
-          next: null,
-          previous: null,
-          results: [
-            book(98, 'A Tale of Two Cities', 'https://www.gutenberg.org/ebooks/98.txt.utf-8'),
-            book(1400, 'Great Expectations', 'https://www.gutenberg.org/ebooks/1400.txt.utf-8'),
-          ],
-        }),
-      },
+      [SEARCH_PATH]: page([
+        book(98, 'A Tale of Two Cities', 'https://www.gutenberg.org/ebooks/98.txt.utf-8'),
+        book(1400, 'Great Expectations', 'https://www.gutenberg.org/ebooks/1400.txt.utf-8'),
+      ]),
     };
     const { hits, options } = await setup(routes, pickWhere((t) => t.startsWith('Sentence one ')), { limit: 1 });
     const report = await harvestVertical(options);
@@ -252,21 +311,14 @@ describe('harvestVertical', () => {
 
   it('skips a book without a usable body or primary-text url, marks a book failed when the picker output is unusable, and moves on', async () => {
     const routes = {
-      [WIKIQUOTE_PATH]: standardRoutes[WIKIQUOTE_PATH],
-      [SEARCH_PATH]: {
-        body: JSON.stringify({
-          count: 3,
-          next: null,
-          previous: null,
-          results: [
-            book(902, 'The Happy Prince', 'https://www.gutenberg.org/ebooks/902.txt.utf-8'),
-            book(903, 'A Mirror Copy', 'https://mirror.example/ebooks/903.txt'),
-            book(98, 'A Tale of Two Cities', 'https://www.gutenberg.org/ebooks/98.txt.utf-8'),
-          ],
-        }),
-      },
-      '/ebooks/902.txt.utf-8': { type: 'text/plain; charset=utf-8', body: gutenberg('The Happy Prince', PROSE) },
-      '/ebooks/903.txt': { type: 'text/plain; charset=utf-8', body: NOVEL },
+      [WIKIQUOTE_PATH]: DICKENS_WIKIQUOTE,
+      [SEARCH_PATH]: page([
+        book(902, 'The Happy Prince', 'https://www.gutenberg.org/ebooks/902.txt.utf-8'),
+        book(903, 'A Mirror Copy', 'https://mirror.example/ebooks/903.txt'),
+        book(98, 'A Tale of Two Cities', 'https://www.gutenberg.org/ebooks/98.txt.utf-8'),
+      ]),
+      '/ebooks/902.txt.utf-8': text(gutenberg('The Happy Prince', PROSE)),
+      '/ebooks/903.txt': text(NOVEL),
       '/ebooks/98.txt.utf-8': standardRoutes['/ebooks/98.txt.utf-8'],
     };
     let calls = 0;

@@ -30,7 +30,11 @@ function setup() {
     NOW(),
   );
   const quote = (body: string, evidence: QuoteEvidence[]) =>
-    insertHarvestedQuote(db, { verticalId, subjectId, body, workTitle: 'A Tale of Two Cities', evidence, wikiquotePage: 'Charles Dickens' }, NOW()).itemId;
+    insertHarvestedQuote(
+      db,
+      { verticalId, subjectId, author: 'Charles Dickens', body, workTitle: 'A Tale of Two Cities', evidence, wikiquotePage: 'Charles Dickens', wikiquoteCheckedAt: NOW().toISOString() },
+      NOW(),
+    ).itemId;
   return { db, verticalId, quote };
 }
 

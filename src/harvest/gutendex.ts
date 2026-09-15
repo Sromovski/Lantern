@@ -37,6 +37,8 @@ export const PLAIN_TEXT_FORMAT = 'text/plain; charset=utf-8';
 
 const COMPILATION = /\b(?:complete|collected|entire)\b.*\bworks\b|\bworks of\b|\bindex of\b/i;
 const POETRY = /\bpoe(?:try|ms)\b/i;
+/** Letters, speeches and similar collections usually carry an editor's headnotes and commentary between the author's words. */
+const EDITED_COLLECTION = /\b(?:letters|speeches|correspondence|memoirs?|diar(?:y|ies)|journals?|notebooks?)\b/i;
 const titleKey = (title: string) => title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
 export function plainTextUrl(book: GutendexBook): string | null {
@@ -52,7 +54,7 @@ export function plainTextUrl(book: GutendexBook): string | null {
  * - no editors or translators
  * - not under copyright
  * - in English
- * - not a compilation
+ * - not a compilation, nor a collection of letters, speeches or the like
  * - not poetry, which needs a line-based picker
  */
 export function isHarvestable(book: GutendexBook, author: HarvestAuthor): boolean {
@@ -70,6 +72,7 @@ export function isHarvestable(book: GutendexBook, author: HarvestAuthor): boolea
     book.languages.includes('en') &&
     plainTextUrl(book) !== null &&
     !COMPILATION.test(book.title) &&
+    !EDITED_COLLECTION.test(book.title) &&
     !POETRY.test(book.title) &&
     ![...book.subjects, ...book.bookshelves].some((s) => POETRY.test(s))
   );

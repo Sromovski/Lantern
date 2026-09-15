@@ -1,7 +1,7 @@
 import { cachedFetch, type CachedResult } from '../lib/cache.js';
 import { fetchWithRetry, type HttpOptions, type HttpResult } from '../lib/http.js';
 import { assertSourceAllowed, SourcePolicyError } from '../verify/source-policy.js';
-import { listedSections, type ListedSection } from '../verify/wikiquote.js';
+import { listedSections, WikiquotePageError, wikiquotePageSchema, type ListedSection } from '../verify/wikiquote.js';
 import { stripGutenbergWrapper } from './gutenberg-text.js';
 import { gutendexPageSchema, type GutendexBook, type HarvestAuthor } from './gutendex.js';
 
@@ -42,6 +42,19 @@ function expectOk(result: CachedResult): CachedResult {
   return result;
 }
 
+function parseJson(body: string): unknown {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Only a 200 whose body has the recorded shape is cached, so an error answered with 200 is fetched again next time. */
+function cacheableWhen(schema: { safeParse(value: unknown): { success: boolean } }) {
+  return (result: HttpResult) => result.status === 200 && schema.safeParse(parseJson(result.body)).success;
+}
+
 export interface Endpoints {
   gutendex: string;
   wikiquote: string;
@@ -67,7 +80,7 @@ export async function gutendexBooks(get: HttpGet, endpoints: Endpoints, author: 
   const books: GutendexBook[] = [];
   let url: string | null = gutendexSearchUrl(endpoints, author);
   for (let page = 0; url !== null && page < MAX_GUTENDEX_PAGES; page++) {
-    const parsed = gutendexPageSchema.parse(JSON.parse(expectOk(await get(url, 'gutendex')).body));
+    const parsed = gutendexPageSchema.parse(JSON.parse(expectOk(await get(url, 'gutendex', cacheableWhen(gutendexPageSchema))).body));
     books.push(...parsed.results);
     if (parsed.next !== null && new URL(parsed.next).origin !== origin) {
       throw new Error(`Gutendex next link leaves ${origin}: ${parsed.next}`);
@@ -123,10 +136,26 @@ export function wikiquotePageTitle(author: HarvestAuthor): string {
 
 export function wikiquotePageUrl(endpoints: Endpoints, title: string): string {
   const page = encodeURIComponent(title.replace(/ /g, '_'));
-  return `${endpoints.wikiquote}/w/api.php?action=parse&format=json&formatversion=2&prop=wikitext&page=${page}`;
+  return `${endpoints.wikiquote}/w/api.php?action=parse&format=json&formatversion=2&prop=wikitext&redirects=1&page=${page}`;
 }
 
-/** The Misattributed and Disputed sections of the author's Wikiquote page, from one request. */
-export async function wikiquoteListedSections(get: HttpGet, endpoints: Endpoints, title: string): Promise<ListedSection[]> {
-  return listedSections(JSON.parse(expectOk(await get(wikiquotePageUrl(endpoints, title), 'wikiquote')).body));
+export interface WikiquoteCheck {
+  sections: ListedSection[];
+  /** When the page was fetched (UTC ISO-8601), which is earlier than now when it came from the cache. */
+  fetchedAt: string;
+}
+
+/**
+ * The Misattributed and Disputed sections of the author's Wikiquote page, from one request. Redirects
+ * are followed, and a page whose title is not the one asked for is refused, so an author configured
+ * under another name cannot pass the check against a page that is not theirs.
+ */
+export async function wikiquoteListedSections(get: HttpGet, endpoints: Endpoints, title: string): Promise<WikiquoteCheck> {
+  const result = expectOk(await get(wikiquotePageUrl(endpoints, title), 'wikiquote', cacheableWhen(wikiquotePageSchema)));
+  const response = JSON.parse(result.body) as unknown;
+  const page = wikiquotePageSchema.parse(response);
+  if (page.parse.title !== title) {
+    throw new WikiquotePageError(`the Wikiquote page for ${title} is ${page.parse.title}; set the author's name to that page title`);
+  }
+  return { sections: listedSections(response), fetchedAt: result.fetchedAt };
 }

@@ -153,10 +153,11 @@ describe('lantern CLI', () => {
     const science = lantern(['harvest', '--vertical', 'science-curious'], scratch, { env: { ANTHROPIC_API_KEY: '' } });
     expect(science.code).toBe(1);
     expect(science.out).toContain('vertical science-curious has no harvest section');
-    const noKey = lantern(['harvest', '--vertical', 'literature'], scratch, { env: { ANTHROPIC_API_KEY: '' } });
+    const cache = join(scratch, 'cache');
+    const noKey = lantern(['harvest', '--vertical', 'literature'], scratch, { env: { ANTHROPIC_API_KEY: '', LANTERN_CACHE: cache } });
     expect(noKey.code).toBe(1);
     expect(noKey.out).toContain('ANTHROPIC_API_KEY is not set');
-    expect(existsSync(join(scratch, 'cache'))).toBe(false);
+    expect(existsSync(cache)).toBe(false);
   }, 30_000);
 
   it('harvest and verify refuse an unknown vertical', () => {

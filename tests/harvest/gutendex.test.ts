@@ -81,6 +81,17 @@ describe('gutendex', () => {
     expect(harvestableBooks(books, DICKENS)).toEqual([]);
   });
 
+  it('drops letters, speeches and other collections that may carry editor prose', () => {
+    const books = [
+      book({ id: 1, title: 'The Letters of Charles Dickens' }),
+      book({ id: 2, title: 'Speeches: Literary and Social' }),
+      book({ id: 3, title: 'The Correspondence of a Novelist' }),
+      book({ id: 4, title: 'A Memoir of the Author' }),
+      book({ id: 5, title: 'Great Expectations' }),
+    ];
+    expect(ids(harvestableBooks(books, DICKENS))).toEqual([5]);
+  });
+
   it('keeps the lowest id among editions with the same title', () => {
     expect(ids(harvestableBooks([book({ id: 26740, title: 'A Tale of Two Cities!' }), book({ id: 98 })], DICKENS))).toEqual([98]);
   });

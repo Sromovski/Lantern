@@ -451,13 +451,22 @@ and whether the book is by the attributed author. Candidates come only from a
 book's own text: from its first chapter, stave or act heading (or its first book
 or part heading when it has none) up to any notes, appendix or index after it; a
 book without such a heading is skipped. A Claude picker chooses among them by
-number; it never supplies text. Each author's Wikiquote page is read first; if
-it cannot be read, that author is skipped, so no quote is inserted without the
-Misattributed and Disputed check, which is recorded in `quote_checks`. A book
-already picked with the same prompt and model is skipped (`book_picks`), so a
-re-run spends nothing on it. `--limit` stops the run starting new books once
-that many quotes are in, and `--refresh` ignores cached responses. The command
-exits 1 when an author is skipped or a book fails.
+number; it never supplies text. Books of letters, speeches, correspondence,
+memoirs, diaries, journals or notebooks are not harvested, since they usually
+carry an editor's prose. Authors take turns, one book each per round, so the
+backlog mixes subjects. On an author's first turn their Wikiquote page is read
+first; a redirect, a different page title, or a Misattributed or Disputed
+section under a heading the check does not recognise counts as unreadable. If
+that page, their Gutendex results or their subject row cannot be used, the
+author is skipped, so no quote is inserted without the Misattributed and
+Disputed check, which is recorded in `quote_checks`. A book already picked with
+the same prompt and model is skipped (`book_picks`), so a re-run spends nothing
+on it. A passage that another author's quote already has is recorded as an
+attribution conflict on that quote instead. `--limit` stops the run starting
+new books once that many quotes are in, so a run can exceed it by up to one
+book's picks, and `--refresh` ignores cached responses. The command exits 1
+when an author is skipped, a book fails, or a passage clashes with another
+author's quote that was already decided.
 
 **`lantern verify --vertical literature`**
 Runs the attribution gates (§8) on each raw item's stored `item_evidence`.

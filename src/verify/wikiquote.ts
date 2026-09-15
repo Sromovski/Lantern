@@ -13,6 +13,11 @@ export const wikiquotePageSchema = z.object({
 
 export type ListedKind = 'Misattributed' | 'Disputed';
 
+/** The page cannot be trusted to show what is listed: a redirect, or a listed section under a heading this check does not recognise. */
+export class WikiquotePageError extends Error {
+  override name = 'WikiquotePageError';
+}
+
 export interface ListedSection {
   title: string;
   kind: ListedKind;
@@ -45,10 +50,12 @@ export function cleanWikitext(line: string): string {
  * section 8: check both explicitly and hard-reject anything listed there. Only top-level `*`
  * bullets are listed quotations; deeper bullets are source notes, and on some pages (Jane Austen)
  * they quote the author's real sentence. Throws a ZodError when the response is not the recorded
- * shape (a MediaWiki error response included).
+ * shape (a MediaWiki error response included), and a WikiquotePageError for a redirect page or for a
+ * level-2 heading that mentions misattribution or dispute without being exactly one of the two.
  */
 export function listedSections(response: unknown): ListedSection[] {
   const { parse } = wikiquotePageSchema.parse(response);
+  if (/^\s*#REDIRECT/i.test(parse.wikitext)) throw new WikiquotePageError(`the Wikiquote page ${parse.title} is a redirect`);
   const sections: ListedSection[] = [];
   let current: ListedSection | null = null;
   for (const line of parse.wikitext.split(/\r?\n/)) {
@@ -56,6 +63,9 @@ export function listedSections(response: unknown): ListedSection[] {
     if (heading !== null) {
       const name = cleanWikitext(heading[1]!);
       const kind: ListedKind | null = /^misattributed$/i.test(name) ? 'Misattributed' : /^disputed$/i.test(name) ? 'Disputed' : null;
+      if (kind === null && /misattribut|disput/i.test(name)) {
+        throw new WikiquotePageError(`the Wikiquote page ${parse.title} has a section heading this check does not recognise: ${name}`);
+      }
       current = kind === null ? null : { title: parse.title, kind, anchor: name.replace(/ /g, '_'), entries: [] };
       if (current !== null) sections.push(current);
       continue;

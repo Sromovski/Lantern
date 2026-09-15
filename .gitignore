@@ -1,8 +1,7 @@
 node_modules/
 dist/
 .env
-data/lantern.db
-data/lantern.db-*
+data/lantern.db*
 data/media/
 logs/
 data/cache/**/*.tmp

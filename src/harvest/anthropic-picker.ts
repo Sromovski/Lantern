@@ -23,7 +23,8 @@ export function anthropicPick(client: Anthropic, model: string): PickFn {
   return async (system, user) => {
     const response = await client.messages.create({
       model,
-      max_tokens: 4000,
+      // Room for adaptive thinking as well as the answer: a max_tokens stop fails the batch.
+      max_tokens: 8000,
       system,
       messages: [{ role: 'user', content: user }],
       output_config: { format: { type: 'json_schema', schema }, effort: 'low' },
