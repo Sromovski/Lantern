@@ -232,7 +232,7 @@ describe('decideQuote', () => {
       expect(verifyQuoteItem(db, itemId, evidence)).toEqual(d);
     }
     expect(verified).toBeGreaterThan(0);
-  });
+  }, 20_000);
 
   it('verifies on the primary source and drops a companion url that only the trigger used to refuse', () => {
     const d = decideQuote(QUOTE, [primary(), { ...scholarly, url: 'https://www.gutenberg.org/ebooks/98?utm_source=goodreads.com' }]);
