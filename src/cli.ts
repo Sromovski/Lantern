@@ -9,6 +9,9 @@ import { migrate, pendingMigrations } from './db/migrate.js';
 import { syncConfig } from './db/sync.js';
 import { runChecks } from './doctor/checks.js';
 import { exitCode, formatReport } from './doctor/report.js';
+import { anthropicChecker, anthropicWriter, loadEnrichPrompts } from './enrich/anthropic.js';
+import { enrichVertical, type ItemReport } from './enrich/enrich.js';
+import { DEFAULT_WIKI_ENDPOINTS } from './enrich/wikipedia.js';
 import { anthropicPick, loadPickPrompt } from './harvest/anthropic-picker.js';
 import { harvestVertical, type AuthorReport } from './harvest/harvest.js';
 import { createHttpGet, DEFAULT_ENDPOINTS } from './harvest/sources.js';
@@ -47,6 +50,20 @@ function findVertical(db: Db, slug: string) {
   return { vertical, verticalId };
 }
 
+/** Cached GETs for a stage, with a log line for every retry so an unattended run can be read back. */
+function cachedGet(refresh: boolean) {
+  return createHttpGet({
+    cacheDir: paths.cache,
+    refresh,
+    http: {
+      userAgent: buildUserAgent(process.env.LANTERN_CONTACT, USER_AGENT_VERSION),
+      // Gutendex can take more than a minute to answer a search.
+      timeoutMs: 180_000,
+      onRetry: (event) => log.warn('http retry', { ...event, url: redactUrl(event.url) }),
+    },
+  });
+}
+
 function describeAuthor(author: AuthorReport): string {
   if (author.error !== null) return `${author.author}: skipped (${author.error})`;
   if (!author.loaded) return `${author.author}: not reached before the limit`;
@@ -54,6 +71,15 @@ function describeAuthor(author: AuthorReport): string {
   const sum = (key: 'inserted' | 'conflicts' | 'conflictsWithDecided') =>
     author.books.reduce((n, b) => n + (b.outcome.status === 'harvested' ? b.outcome[key] : 0), 0);
   return `${author.author}: ${author.listedEntries} listed on Wikiquote; books harvested ${count('harvested')}, already picked ${count('already-picked')}, skipped ${count('skipped')}, failed ${count('failed')}; quotes inserted ${sum('inserted')}; attribution conflicts ${sum('conflicts')} recorded, ${sum('conflictsWithDecided')} with decided quotes`;
+}
+
+function describeItem(item: ItemReport): string {
+  const head = `quote ${item.itemId} (${item.author}, ${item.workTitle})`;
+  const outcome = item.outcome;
+  if (outcome.status === 'failed') return `${head}: failed (${outcome.reason})`;
+  const revised = outcome.rounds > 1 ? ', after one revision' : '';
+  if (outcome.status === 'draft') return `${head}: post ${outcome.postId} drafted${revised}`;
+  return `${head}: post ${outcome.postId} needs review${revised}: ${outcome.problems.join('; ')}`;
 }
 
 program
@@ -84,16 +110,7 @@ program
     if (harvest === undefined) throw new Error(`vertical ${vertical.slug} has no harvest section`);
     if (!process.env.ANTHROPIC_API_KEY?.trim()) throw new Error('ANTHROPIC_API_KEY is not set; the passage picker needs it');
 
-    const get = createHttpGet({
-      cacheDir: paths.cache,
-      refresh: opts.refresh === true,
-      http: {
-        userAgent: buildUserAgent(process.env.LANTERN_CONTACT, USER_AGENT_VERSION),
-        // Gutendex can take more than a minute to answer a search.
-        timeoutMs: 180_000,
-        onRetry: (event) => log.warn('http retry', { ...event, url: redactUrl(event.url) }),
-      },
-    });
+    const get = cachedGet(opts.refresh === true);
     // A pick only reads, so retrying it is safe; the timeout keeps one stuck batch from stalling a cron run.
     const client = new Anthropic({ timeout: 120_000, maxRetries: 3 });
     const report = await runStage(db, { stage: 'harvest', verticalId }, () =>
@@ -135,6 +152,44 @@ program
     console.log(`rejected: ${JSON.stringify(report.rejected)}`);
     console.log(`left raw: ${report.unchecked} without a Wikiquote check, ${report.malformed} with malformed evidence`);
     if (report.malformed > 0) process.exitCode = 1;
+  });
+
+program
+  .command('enrich')
+  .description('Write posts for verified quotes from Wikipedia paragraphs, fact-check every sentence and allow one revision; exits 1 if a quote could not be written')
+  .requiredOption('--vertical <slug>', 'the vertical to enrich')
+  .option('--limit <n>', 'write posts for at most this many verified quotes', '5')
+  .option('--refresh', 'ignore cached Wikidata and Wikipedia responses and fetch again')
+  .action(async (opts: { vertical: string; limit: string; refresh?: boolean }) => {
+    const limit = Number(opts.limit);
+    if (!Number.isInteger(limit) || limit < 1) throw new Error(`--limit must be a positive integer, got ${opts.limit}`);
+    const db = openMigratedDb();
+    const { vertical, verticalId } = findVertical(db, opts.vertical);
+    const enrich = vertical.enrich;
+    if (enrich === undefined) throw new Error(`vertical ${vertical.slug} has no enrich section`);
+    if (!process.env.ANTHROPIC_API_KEY?.trim()) throw new Error('ANTHROPIC_API_KEY is not set; the writer and the fact check need it');
+    const prompts = loadEnrichPrompts(paths.root, vertical.slug);
+
+    // A writer call can think for minutes before it answers. A call only reads, so retrying it is safe.
+    const client = new Anthropic({ timeout: 300_000, maxRetries: 2 });
+    const report = await runStage(db, { stage: 'enrich', verticalId }, () =>
+      enrichVertical({
+        db,
+        verticalId,
+        vertical,
+        enrich,
+        get: cachedGet(opts.refresh === true),
+        endpoints: DEFAULT_WIKI_ENDPOINTS,
+        write: anthropicWriter(client, enrich.writer_model),
+        check: anthropicChecker(client, enrich.checker_model),
+        prompts,
+        limit,
+        log,
+      }),
+    );
+    for (const item of report.items) console.log(describeItem(item));
+    console.log(`posts: ${report.drafted} draft, ${report.needsReview} needs review; failed: ${report.failed}`);
+    if (report.failed > 0) process.exitCode = 1;
   });
 
 program

@@ -352,6 +352,31 @@ CREATE TABLE posts (
   UNIQUE(item_id)
 );
 
+-- One writing round behind a post: the draft, its fact check and the problems the gates
+-- found. Round 2 exists only when round 1 had problems (one revision, then review).
+CREATE TABLE post_rounds (
+  id             INTEGER PRIMARY KEY,
+  post_id        INTEGER NOT NULL REFERENCES posts(id),
+  round          INTEGER NOT NULL,      -- 1 | 2
+  draft_json     TEXT NOT NULL,         -- hook, body paragraphs, closer, each with its labels
+  check_json     TEXT NOT NULL,         -- one verdict per sentence
+  problems_json  TEXT NOT NULL,         -- empty array when the round passed every gate
+  writer_model   TEXT NOT NULL,
+  checker_model  TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  UNIQUE(post_id, round)
+);
+
+-- The stored sources a post's drafts cite, under the label the drafts use (S1, S2, ...).
+CREATE TABLE post_sources (
+  id            INTEGER PRIMARY KEY,
+  post_id       INTEGER NOT NULL REFERENCES posts(id),
+  source_id     INTEGER NOT NULL REFERENCES sources(id),
+  label         TEXT NOT NULL,
+  UNIQUE(post_id, label),
+  UNIQUE(post_id, source_id)
+);
+
 -- Format-specific media artifacts derived from a post.
 CREATE TABLE renditions (
   id            INTEGER PRIMARY KEY,
@@ -480,12 +505,26 @@ reopened to `raw` and verified again once better evidence exists (with
 `--retry-insufficient`). Every other rejection is final.
 
 **`lantern enrich --vertical literature --limit 5`**
-Claude call. Given the item, its subject, and its stored sources, write the
-platform-neutral post: hook, body, closer. Structured output. The prompt is in
-the vertical config so each vertical has its own voice. A second Claude call
-(different prompt, sources-only context) checks the draft for claims not
-supported by the provided sources; unsupported claims send the post to
-`needs_review` rather than silently dropping the sentence.
+Claude calls. For each verified quote without a post (authors taking turns), the
+author's Wikipedia article (found through the subject's Wikidata id) and the
+work's article (found through a Wikidata search for the title) are fetched and
+cached. Their paragraphs, labelled S1, S2, ..., are the only facts the writer
+gets. The writer (`enrich.writer_model`, with server-side fallback) returns the
+platform-neutral post as structured output: hook, body paragraphs and closer,
+each with the labels it relies on. The prompts live in `prompts/<vertical>/` and
+`prompts/shared/`; the vertical config supplies the voice, post shape and banned
+topics, so each vertical has its own voice. Gates then judge the draft: its shape
+and labels, every number against the quotation and the cited paragraphs (§8),
+and a second Claude call (`enrich.checker_model`, a different prompt,
+sources-only context) that judges every sentence against the paragraphs the draft
+cites. A draft with any problem gets one revision with the problems listed, and
+the revision is judged the same way. Problems that remain send the post to
+`needs_review` with the reasons stored, rather than silently dropping a
+sentence. Both rounds and every check are kept in `post_rounds` for review, and
+the cited paragraphs become tier 3 sources of the quote, linked to the post
+through `post_sources`. A quote whose articles cannot be read, or whose first
+draft or its check is refused, gets no post and is tried again on the next run;
+the command then exits 1.
 
 **`lantern media --vertical literature`**
 Resolve a source image (§10). Public domain first, AI generation as fallback.
@@ -916,8 +955,6 @@ the existing channels have run clean for a month.
 
 - Final page names, and handle availability across FB / IG / YouTube / Pinterest
   / TikTok / .com checked simultaneously (§3).
-- Which Claude model tier for enrichment vs. the fact-check pass; the check pass
-  can likely be a cheaper model with a tight rubric.
 - Where the archive site and rendition files are hosted — the portal site, or a
   small static bucket. Needed before phase 8.
 - TTS provider and whether narration is synthetic at all; a science Short may

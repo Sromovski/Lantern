@@ -178,4 +178,33 @@ describe('lantern CLI', () => {
     expect(res.out).toContain('verified: 0');
     expect(res.out).toContain('left raw: 0 without a Wikiquote check, 0 with malformed evidence');
   }, 30_000);
+
+  it('enrich refuses a bad limit, pending migrations, a vertical without an enrich section, and a missing API key, without fetching anything', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    const badLimit = lantern(['enrich', '--vertical', 'literature', '--limit', '0'], scratch, { env: { ANTHROPIC_API_KEY: '' } });
+    expect(badLimit.code).toBe(1);
+    expect(badLimit.out).toContain('--limit must be a positive integer, got 0');
+    const pending = lantern(['enrich', '--vertical', 'literature'], scratch, { env: { ANTHROPIC_API_KEY: '' } });
+    expect(pending.code).toBe(1);
+    expect(pending.out).toContain('run lantern migrate');
+    expect(lantern(['migrate'], scratch).code).toBe(0);
+    const science = lantern(['enrich', '--vertical', 'science-curious'], scratch, { env: { ANTHROPIC_API_KEY: '' } });
+    expect(science.code).toBe(1);
+    expect(science.out).toContain('vertical science-curious has no enrich section');
+    const cache = join(scratch, 'cache');
+    const noKey = lantern(['enrich', '--vertical', 'literature'], scratch, { env: { ANTHROPIC_API_KEY: '', LANTERN_CACHE: cache } });
+    expect(noKey.code).toBe(1);
+    expect(noKey.out).toContain('ANTHROPIC_API_KEY is not set');
+    expect(existsSync(cache)).toBe(false);
+  }, 60_000);
+
+  it('enrich writes nothing when no verified quote is waiting for a post', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    expect(lantern(['migrate'], scratch).code).toBe(0);
+    const cache = join(scratch, 'cache');
+    const res = lantern(['enrich', '--vertical', 'literature'], scratch, { env: { ANTHROPIC_API_KEY: 'test-key-never-sent', LANTERN_CACHE: cache } });
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('posts: 0 draft, 0 needs review; failed: 0');
+    expect(existsSync(cache)).toBe(false);
+  }, 30_000);
 });

@@ -2768,6 +2768,8 @@ Every milestone below follows the same opening ritual:
 
 > **Status:** the `lantern harvest` and `lantern verify` commands (2.1 wiring, 2.3) are built on branch `phase-2-commands` (docs/plans/phase-2-commands.md, Tasks M1-M6): author subjects bound by Wikidata id, the Wikiquote check before any insert (`quote_checks`), per-book picks remembered (`book_picks`), cached Gutendex, Gutenberg and Wikiquote fetches, and `verify` deciding only checked quotes, with `--retry-insufficient`. Everything is tested against local servers; the first live harvest is the user's to run.
 
+> **Status:** enrichment and fact-check (2.4) are built on branch `phase-2-enrich` (docs/plans/phase-2-enrich.md, Tasks N1-N7). User decisions 2026-09-15: `claude-opus-5` writes, with server-side fallback, and `claude-sonnet-5` checks; the only background facts are paragraphs of the author's and the work's Wikipedia articles, found through Wikidata and stored as tier 3 sources of the quote; a draft with problems gets one visible revision before `needs_review`. Where the build differs from the bullets below: the fact check sees the paragraphs the draft cites rather than every stored source, the gates also check the post shape and the cited labels, and `alt_text` is fixed text built from the quote until the media stage chooses an image. Everything is tested against local servers; a live smoke run on 2026-09-15 drafted posts for two quotes in 45 s.
+
 *Done when (spec §14):* 20 finished literature posts exist on disk in `square` and `pin` that you would be happy to publish.
 
 **2.1 Gutendex harvester** — `src/harvest/gutendex.ts`
@@ -2791,7 +2793,7 @@ Every milestone below follows the same opening ritual:
 - Prompts in version-controlled files: `prompts/literature/enrich.md`, `prompts/shared/fact-check.md`. The vertical `voice`, `post_shape`, and `banned_topics` are injected as context.
 - Call 1 writes `{ hook, body, closer, alt_text }` as structured output. Call 2 gets **only** the stored sources plus the draft and returns unsupported claims.
 - Gate: any unsupported claim **or** a non-empty `unsupportedNumbers(hook + body + closer, sourceExcerpts)` → `needs_review` with the reasons stored. This applies to every vertical, not just science, because dates in literature posts are numbers too.
-- Model tier for each call is an open decision (below).
+- Model tier: `claude-opus-5` writes and `claude-sonnet-5` checks (open decision #6, decided 2026-09-15).
 
 **2.5 Wikimedia image lookup** — `src/media/wikimedia.ts`
 - Wikidata `P18` → Commons `imageinfo` + `extmetadata`. Map the license to the whitelist (`public-domain` | `cc0` | `cc-by`); anything else is rejected. Store attribution.
@@ -2875,7 +2877,7 @@ Every milestone below follows the same opening ritual:
 | 3 | Where it runs unattended: this Windows PC via Task Scheduler, or a small always-on host | Phase 5 | A sleeping desktop silently stops posting, which is the exact failure the spec warns about |
 | 4 | Token encryption at rest (Windows DPAPI vs. libsodium with a key in `.env`) | Phase 4 | |
 | 5 | Alert channel (email, push, …) | Phase 5 | |
-| 6 | Claude model tier for enrichment vs. fact-check | Phase 2.4 | Consult the `claude-api` skill; the fact-check can likely use a cheaper model with a tight rubric |
+| 6 | Claude model tier for enrichment vs. fact-check | Phase 2.4 | **Decided 2026-09-15:** `claude-opus-5` writes (server-side fallback), `claude-sonnet-5` checks; Wikipedia paragraphs are the background sources; one visible revision before `needs_review` |
 | 7 | Archive hosting, and whether a minimal archive ships with Pinterest in Phase 6 instead of Phase 8 | Phase 6 | Pinterest's value is mostly the link |
 | 8 | TTS provider, or no narration at all | Phase 8 | |
 | 9 | The two typefaces and wordmark | Phase 2.6 | Must be OFL or otherwise redistributable |
