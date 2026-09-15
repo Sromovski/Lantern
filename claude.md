@@ -298,6 +298,30 @@ CREATE TABLE item_evidence (
   recorded_at    TEXT NOT NULL
 );
 
+-- The Wikiquote Misattributed/Disputed check made for a quote before it was inserted.
+CREATE TABLE quote_checks (
+  id             INTEGER PRIMARY KEY,
+  item_id        INTEGER NOT NULL REFERENCES items(id),
+  check_name     TEXT NOT NULL,         -- 'wikiquote'
+  page           TEXT NOT NULL,         -- the page whose sections were checked
+  checked_at     TEXT NOT NULL,
+  UNIQUE(item_id, check_name)
+);
+
+-- A book whose candidates the picker has judged with this prompt and model; re-runs skip it.
+CREATE TABLE book_picks (
+  id             INTEGER PRIMARY KEY,
+  vertical_id    INTEGER NOT NULL REFERENCES verticals(id),
+  gutenberg_id   INTEGER NOT NULL,
+  prompt_sha256  TEXT NOT NULL,
+  model          TEXT NOT NULL,
+  batches        INTEGER NOT NULL,
+  failed_batches INTEGER NOT NULL,
+  picked         INTEGER NOT NULL,
+  picked_at      TEXT NOT NULL,
+  UNIQUE(vertical_id, gutenberg_id, prompt_sha256, model)
+);
+
 -- Source imagery, before composition.
 CREATE TABLE images (
   id            INTEGER PRIMARY KEY,
@@ -427,16 +451,24 @@ and whether the book is by the attributed author. Candidates come only from a
 book's own text: from its first chapter, stave or act heading (or its first book
 or part heading when it has none) up to any notes, appendix or index after it; a
 book without such a heading is skipped. A Claude picker chooses among them by
-number; it never supplies text.
+number; it never supplies text. Each author's Wikiquote page is read first; if
+it cannot be read, that author is skipped, so no quote is inserted without the
+Misattributed and Disputed check, which is recorded in `quote_checks`. A book
+already picked with the same prompt and model is skipped (`book_picks`), so a
+re-run spends nothing on it. `--limit` stops the run starting new books once
+that many quotes are in, and `--refresh` ignores cached responses. The command
+exits 1 when an author is skipped or a book fails.
 
 **`lantern verify --vertical literature`**
 Runs the attribution gates (§8) on each raw item's stored `item_evidence`.
+A raw quote without a recorded Wikiquote check, or with a malformed evidence
+row, is left raw and counted, and a malformed row makes the command exit 1.
 Promotes to `verified` with `sources` rows, or marks `rejected` with a reason.
 Rejections are kept, not deleted — they are the dedupe memory that stops us
 re-harvesting the same bad quote monthly.
 The one exception is a quote rejected only for insufficient evidence: it may be
-reopened to `raw` and verified again once better evidence exists. Every other
-rejection is final.
+reopened to `raw` and verified again once better evidence exists (with
+`--retry-insufficient`). Every other rejection is final.
 
 **`lantern enrich --vertical literature --limit 5`**
 Claude call. Given the item, its subject, and its stored sources, write the

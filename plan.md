@@ -2766,6 +2766,8 @@ Every milestone below follows the same opening ritual:
 
 > **Status:** the front-matter cut (P1 from the harvest-core final review), the Claude passage picker (`claude-sonnet-5`, structured output, prompt in `prompts/literature/pick.md`) and the Wikiquote Misattributed/Disputed parser (2.2) are built and tested offline on branch `phase-2-picker` (docs/plans/phase-2-picker.md, Tasks L1-L5). The `lantern harvest` and `lantern verify` commands, with their network fetches, subject rows and evidence inserts, come next.
 
+> **Status:** the `lantern harvest` and `lantern verify` commands (2.1 wiring, 2.3) are built on branch `phase-2-commands` (docs/plans/phase-2-commands.md, Tasks M1-M6): author subjects bound by Wikidata id, the Wikiquote check before any insert (`quote_checks`), per-book picks remembered (`book_picks`), cached Gutendex, Gutenberg and Wikiquote fetches, and `verify` deciding only checked quotes, with `--retry-insufficient`. Everything is tested against local servers; the first live harvest is the user's to run.
+
 *Done when (spec §14):* 20 finished literature posts exist on disk in `square` and `pin` that you would be happy to publish.
 
 **2.1 Gutendex harvester** — `src/harvest/gutendex.ts`
