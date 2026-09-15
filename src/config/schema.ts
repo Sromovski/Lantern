@@ -29,6 +29,17 @@ export const harvestSchema = z.strictObject({
   }),
 });
 
+export const enrichSchema = z.strictObject({
+  /** Writes each draft and its one revision. */
+  writer_model: z.string().min(1),
+  /** Checks every sentence of a draft against the paragraphs it cites. */
+  checker_model: z.string().min(1),
+  /** The most characters of paragraphs offered to the writer from the author's Wikipedia article. */
+  author_article_chars: z.number().int().min(1000).max(100_000),
+  /** The same for the work's article. */
+  work_article_chars: z.number().int().min(1000).max(100_000),
+});
+
 export const verticalSchema = z
   .strictObject({
     slug,
@@ -46,6 +57,7 @@ export const verticalSchema = z
       generated_disclosure: z.literal(true),
     }),
     harvest: harvestSchema.optional(),
+    enrich: enrichSchema.optional(),
   })
   .superRefine((v, ctx) => {
     if (v.kid_safe && (!v.audience.reading_level || v.banned_topics.length === 0)) {
@@ -94,3 +106,4 @@ export const channelSchema = z
 export type VerticalConfig = z.infer<typeof verticalSchema>;
 export type ChannelConfig = z.infer<typeof channelSchema>;
 export type HarvestConfig = z.infer<typeof harvestSchema>;
+export type EnrichConfig = z.infer<typeof enrichSchema>;
