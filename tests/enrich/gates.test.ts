@@ -94,16 +94,29 @@ describe('citedParagraphs and numberProblems', () => {
 describe('checkProblems', () => {
   const sentences = draftSentences(CLEAN);
   const verdict = (id: number, supported = true, problem = '') => ({ id, kind: 'fact' as const, supported, sources: supported ? ['S1'] : [], problem });
+  const CITED = new Set(['S1', 'S2', 'S3']);
 
   it('finds nothing when every sentence is supported', () => {
-    expect(checkProblems({ sentences: sentences.map((s) => verdict(s.n)) }, sentences)).toEqual([]);
+    expect(checkProblems({ sentences: sentences.map((s) => verdict(s.n)) }, sentences, CITED)).toEqual([]);
+  });
+
+  it('reports a fact judged supported without naming the quotation or a cited paragraph', () => {
+    const check: Check = { sentences: sentences.map((s) => verdict(s.n)) };
+    check.sentences[0] = { ...check.sentences[0]!, sources: [] };
+    check.sentences[1] = { ...check.sentences[1]!, sources: ['S9'] };
+    check.sentences[2] = { ...check.sentences[2]!, kind: 'interpretation', sources: [] };
+    check.sentences[3] = { ...check.sentences[3]!, sources: ['Q'] };
+    expect(checkProblems(check, sentences, CITED)).toEqual([
+      '"Dickens set this reflection in a novel full of secrets." was judged a supported fact without naming the quotation or a cited paragraph that supports it',
+      '"Dickens published the novel in 1859." was judged a supported fact without naming the quotation or a cited paragraph that supports it',
+    ]);
   });
 
   it('reports unsupported sentences with the detail, and any sentence not judged exactly once', () => {
     const check: Check = {
       sentences: [verdict(1), verdict(2, false, 'the year is not in the cited paragraph'), verdict(3, false, ' '), verdict(4), verdict(4), verdict(9)],
     };
-    expect(checkProblems(check, sentences)).toEqual([
+    expect(checkProblems(check, sentences, CITED)).toEqual([
       '"Dickens published the novel in 1859." is not supported by the source paragraphs: the year is not in the cited paragraph',
       '"It is set in London and Paris." is not supported by the source paragraphs: the fact check gave no detail',
       'the fact check gave 2 verdicts for "The line reads privacy as a condition."',

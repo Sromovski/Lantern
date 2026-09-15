@@ -164,6 +164,10 @@ lantern/
   prompts/
     literature/
       pick.md           # passage picker system prompt; the model chooses by number
+      enrich.md         # post writer; the vertical's voice, post shape and banned topics are filled in
+      revise.md         # the one revision of a draft with problems
+    shared/
+      fact-check.md     # sentence-by-sentence check against the cited paragraphs only
   src/
     cli.ts              # entry point, subcommands
     config/             # vertical/channel YAML schemas + loader
@@ -363,6 +367,7 @@ CREATE TABLE post_rounds (
   problems_json  TEXT NOT NULL,         -- empty array when the round passed every gate
   writer_model   TEXT NOT NULL,
   checker_model  TEXT NOT NULL,
+  prompt_sha256  TEXT NOT NULL,         -- the round's writer prompt, a blank line, and the checker prompt
   created_at     TEXT NOT NULL,
   UNIQUE(post_id, round)
 );
@@ -375,6 +380,14 @@ CREATE TABLE post_sources (
   label         TEXT NOT NULL,
   UNIQUE(post_id, label),
   UNIQUE(post_id, source_id)
+);
+
+-- A failed attempt to write a post for a verified quote; after three, enrich stops offering it.
+CREATE TABLE enrich_failures (
+  id            INTEGER PRIMARY KEY,
+  item_id       INTEGER NOT NULL REFERENCES items(id),
+  reason        TEXT NOT NULL,
+  failed_at     TEXT NOT NULL
 );
 
 -- Format-specific media artifacts derived from a post.
@@ -522,9 +535,17 @@ the revision is judged the same way. Problems that remain send the post to
 `needs_review` with the reasons stored, rather than silently dropping a
 sentence. Both rounds and every check are kept in `post_rounds` for review, and
 the cited paragraphs become tier 3 sources of the quote, linked to the post
-through `post_sources`. A quote whose articles cannot be read, or whose first
-draft or its check is refused, gets no post and is tried again on the next run;
-the command then exits 1.
+through `post_sources`. A collection (a title naming several works), an
+ambiguous title, or a work article that does not load leaves the author's
+article alone, and the checker is told the quotation's work and author: saying
+where a quotation falls in its work, or who says it, needs a paragraph like any
+other fact. A failed revision leaves the first round as a `needs_review` post. A
+quote whose author article cannot be read, or whose first draft or its check is
+refused or unusable (truncated, or not the expected JSON), gets no post, and the
+failure is recorded in `enrich_failures`; the command exits 1. Later runs offer
+quotes with fewer failures first and stop offering a quote after three failures,
+unless run with `--retry-failed`. `--refresh` ignores cached Wikidata and
+Wikipedia responses.
 
 **`lantern media --vertical literature`**
 Resolve a source image (§10). Public domain first, AI generation as fallback.

@@ -57,7 +57,7 @@ export function checkerMessage(quote: QuoteContext, cited: readonly SourceParagr
   return [
     'Source paragraphs:',
     '',
-    `[Q] (the quotation, from the book) ${quote.body}`,
+    `[Q] (the quotation, from ${quote.workTitle} by ${quote.author}) ${quote.body}`,
     ...cited.map((paragraph) => `\n${formatParagraph(paragraph)}`),
     '',
     'Draft sentences:',

@@ -4,10 +4,12 @@ import type { AddressInfo } from 'node:net';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { MAX_ENRICH_FAILURES } from '../../src/db/posts.js';
 import { insertHarvestedQuote, upsertAuthorSubject } from '../../src/db/quotes.js';
 import { EnrichResponseError, type ModelFn } from '../../src/enrich/anthropic.js';
 import type { Draft } from '../../src/enrich/draft.js';
-import { enrichVertical } from '../../src/enrich/enrich.js';
+import { enrichVertical, type EnrichOptions } from '../../src/enrich/enrich.js';
 import { articleUrl, DEFAULT_WIKI_ENDPOINTS, entitiesUrl, workSearchUrl } from '../../src/enrich/wikipedia.js';
 import type { HarvestAuthor } from '../../src/harvest/gutendex.js';
 import { createHttpGet } from '../../src/harvest/sources.js';
@@ -92,6 +94,8 @@ const GOOD: Draft = {
 };
 const FLAWED: Draft = { ...GOOD, body: [part(`${GOOD.body[0]!.text} He was UNSUPPORTED the most famous man alive.`, ['S1']), GOOD.body[1]!] };
 const NUMBERED: Draft = { ...GOOD, closer: part('The novel has 45 chapters.', ['S2']) };
+const AUTHOR_ONLY: Draft = { ...GOOD, hook: part(GOOD.hook.text, []), body: [GOOD.body[0]!, part('He published A Tale of Two Cities in 1859.', ['S2'])] };
+const refusal = (what: string) => new EnrichResponseError(`the ${what} stopped with refusal and no usable output`);
 
 /** A writer that answers with each draft in turn (repeating the last), or throws a given error. */
 function writer(...answers: (Draft | Error)[]) {
@@ -113,7 +117,7 @@ function checker() {
     const sentences = [...user.matchAll(/^\((\d+)\) (.*)$/gm)].map((m) => ({ id: Number(m[1]), text: m[2]! }));
     const verdicts = sentences.map(({ id, text }) => {
       const flagged = text.includes('UNSUPPORTED');
-      return { id, kind: 'fact', supported: !flagged, sources: [], problem: flagged ? 'the sources do not say he was the most famous man alive' : '' };
+      return { id, kind: 'fact', supported: !flagged, sources: flagged ? [] : ['S1'], problem: flagged ? 'the sources do not say he was the most famous man alive' : '' };
     });
     return { value: { sentences: verdicts }, model: 'claude-sonnet-5', inputTokens: 40, outputTokens: 20 };
   };
@@ -147,8 +151,8 @@ async function setup(routes = ROUTES) {
     return itemId;
   };
   const { get, hits } = await wiki(routes);
-  const enrich = (write: ModelFn, check: ModelFn) =>
-    enrichVertical({ db, verticalId, vertical: VERTICAL, enrich: ENRICH, get, endpoints: E, write, check, prompts: PROMPTS, limit: 5, now: NOW });
+  const enrich = (write: ModelFn, check: ModelFn, extra: Partial<EnrichOptions> = {}) =>
+    enrichVertical({ db, verticalId, vertical: VERTICAL, enrich: ENRICH, get, endpoints: E, write, check, prompts: PROMPTS, limit: 5, now: NOW, ...extra });
   return { db, quote, enrich, hits };
 }
 
@@ -167,6 +171,7 @@ describe('enrichVertical', () => {
       drafted: 1,
       needsReview: 0,
       failed: 0,
+      givenUp: 0,
       items: [
         {
           itemId,
@@ -194,11 +199,30 @@ describe('enrichVertical', () => {
     expect(write.calls[0]!.user).toContain(`[S3] (A Tale of Two Cities: Lead) ${S3}`);
     expect(write.calls[0]!.user).not.toContain(DROPPED);
     expect(check.calls[0]!.system).toBe('CHECK');
-    expect(check.calls[0]!.user).toContain(`[Q] (the quotation, from the book) ${BODY}`);
+    expect(check.calls[0]!.user).toContain(`[Q] (the quotation, from A Tale of Two Cities by Charles Dickens) ${BODY}`);
+    expect(db.prepare('SELECT prompt_sha256 FROM post_rounds').pluck().get()).toBe(
+      createHash('sha256').update('WRITE Warm and precise. 1 sentence\n\nCHECK').digest('hex'),
+    );
     expect(check.calls[0]!.user).toContain('(4) The novel keeps returning to what people hide.');
 
     expect(await enrich(write.fn, check.fn)).toMatchObject({ considered: 0, drafted: 0 });
     expect(write.calls).toHaveLength(1);
+  });
+
+  it('reads each article once for two quotes from the same work, and gives both posts its paragraphs', async () => {
+    const { db, quote, enrich, hits } = await setup();
+    quote(DICKENS, BODY, 'A Tale of Two Cities');
+    quote(DICKENS, 'It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness.', 'A Tale of Two Cities');
+
+    expect(await enrich(writer(GOOD).fn, checker().fn)).toMatchObject({ considered: 2, drafted: 2, failed: 0 });
+    expect(hits.filter((hit) => hit.includes('prop=extracts'))).toHaveLength(2);
+    const citations = db
+      .prepare('SELECT p.post_id, s.citation FROM post_sources p JOIN sources s ON s.id = p.source_id WHERE p.label = ? ORDER BY p.post_id')
+      .all('S3') as { post_id: number; citation: string }[];
+    expect(citations.map((c) => c.citation)).toEqual([
+      'Wikipedia, "A Tale of Two Cities", lead section, revision 1374830091',
+      'Wikipedia, "A Tale of Two Cities", lead section, revision 1374830091',
+    ]);
   });
 
   it('gives a draft with an unsupported sentence one revision and keeps both rounds', async () => {
@@ -262,12 +286,56 @@ describe('enrichVertical', () => {
     const routes = { ...ROUTES, [pathOf(workSearchUrl(E, 'Q5686', 'A Tale of Two Cities'))]: { batchcomplete: true, query: { search: [] } } };
     const { quote, enrich } = await setup(routes);
     quote(DICKENS, BODY, 'A Tale of Two Cities');
-    const authorOnly: Draft = { ...GOOD, hook: part(GOOD.hook.text, []), body: [GOOD.body[0]!, part('He published A Tale of Two Cities in 1859.', ['S2'])] };
     await expect(enrich(writer(new Error('socket hang up')).fn, checker().fn)).rejects.toThrow('socket hang up');
 
-    const write = writer(authorOnly);
+    const write = writer(AUTHOR_ONLY);
     const report = await enrich(write.fn, checker().fn);
     expect(report.items[0]!.outcome).toMatchObject({ status: 'draft', rounds: 1, workArticle: null });
     expect(write.calls[0]!.user).not.toContain('[S3]');
+  });
+
+  it('uses the author article alone when the work article turns out to be another item', async () => {
+    const routes = { ...ROUTES, [pathOf(articleUrl(E, 'A Tale of Two Cities'))]: page('A Tale of Two Cities (disambiguation)', 'Q999', S3, 1) };
+    const { quote, enrich } = await setup(routes);
+    quote(DICKENS, BODY, 'A Tale of Two Cities');
+    const write = writer(AUTHOR_ONLY);
+    expect((await enrich(write.fn, checker().fn)).items[0]!.outcome).toMatchObject({ status: 'draft', workArticle: null });
+    expect(write.calls[0]!.user).not.toContain('[S3]');
+  });
+
+  it('fails the quote when the first fact check is refused, and sends it to review when the revision check is', async () => {
+    const { db, quote, enrich } = await setup();
+    quote(DICKENS, BODY, 'A Tale of Two Cities');
+    const refusing: ModelFn = async () => {
+      throw refusal('fact check');
+    };
+    expect((await enrich(writer(GOOD).fn, refusing)).items[0]!.outcome).toEqual({
+      status: 'failed',
+      reason: 'the fact check stopped with refusal and no usable output',
+    });
+    expect(db.prepare('SELECT COUNT(*) FROM posts').pluck().get()).toBe(0);
+
+    const good = checker();
+    let calls = 0;
+    const refusesSecond: ModelFn = async (system, user) => {
+      calls++;
+      if (calls === 2) throw refusal('fact check');
+      return good.fn(system, user);
+    };
+    const report = await enrich(writer(FLAWED, GOOD).fn, refusesSecond);
+    expect(report.items[0]!.outcome).toMatchObject({ status: 'needs_review', rounds: 1 });
+    expect(report.items[0]!.outcome.status === 'needs_review' && report.items[0]!.outcome.problems.at(-1)).toBe(
+      'the revision failed: the fact check stopped with refusal and no usable output',
+    );
+  });
+
+  it('stops offering a quote that failed too often, counts it as given up, and tries it again when asked', async () => {
+    const { db, quote, enrich } = await setup();
+    const austen = quote(AUSTEN, 'It is a truth universally acknowledged, that a single man in possession of a good fortune must be in want of a wife.', 'Pride and Prejudice');
+    for (let n = 1; n < MAX_ENRICH_FAILURES; n++) expect(await enrich(writer(GOOD).fn, checker().fn)).toMatchObject({ considered: 1, failed: 1, givenUp: 0 });
+    expect(await enrich(writer(GOOD).fn, checker().fn)).toMatchObject({ considered: 1, failed: 1, givenUp: 1 });
+    expect(await enrich(writer(GOOD).fn, checker().fn)).toMatchObject({ considered: 0, failed: 0, givenUp: 1 });
+    expect(await enrich(writer(GOOD).fn, checker().fn, { retryFailed: true })).toMatchObject({ considered: 1, failed: 1, givenUp: 0 });
+    expect(db.prepare('SELECT COUNT(*) FROM enrich_failures WHERE item_id = ?').pluck().get(austen)).toBe(MAX_ENRICH_FAILURES + 1);
   });
 });

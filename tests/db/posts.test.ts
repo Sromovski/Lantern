@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { insertPost, itemsToEnrich, PostRuleError, type NewPost } from '../../src/db/posts.js';
+import { countGivenUp, insertPost, itemsToEnrich, MAX_ENRICH_FAILURES, PostRuleError, recordEnrichFailure, type NewPost } from '../../src/db/posts.js';
 import { insertHarvestedQuote, upsertAuthorSubject } from '../../src/db/quotes.js';
 import { insertSource } from '../../src/db/sources.js';
 import type { HarvestAuthor } from '../../src/harvest/gutendex.js';
@@ -48,6 +48,7 @@ const round = (problems: string[] = []) => ({
   problems,
   writerModel: 'claude-opus-5',
   checkerModel: 'claude-sonnet-5',
+  promptSha256: 'a'.repeat(64),
 });
 
 const post = (itemId: number, verticalId: number, overrides: Partial<NewPost> = {}): NewPost => ({
@@ -96,6 +97,38 @@ describe('itemsToEnrich', () => {
     insertPost(db, post(d1, verticalId), NOW());
     expect(itemsToEnrich(db, verticalId, 10).map((i) => i.itemId)).toEqual([d2, a1]);
   });
+
+  it('leaves out verified quotes without a work title or an author Wikidata id', () => {
+    const { db, verticalId, quote } = setup();
+    const untitled = quote(DICKENS, 'There is a wisdom of the head, and a wisdom of the heart, and they are not the same.', 'Hard Times');
+    const unlinked = quote(AUSTEN, 'It is a truth universally acknowledged, that a single man in possession of a good fortune must be in want of a wife.', 'Pride and Prejudice');
+    db.prepare('UPDATE items SET work_title = NULL WHERE id = ?').run(untitled);
+    verifyVertical(db, verticalId, { now: NOW });
+    db.prepare("UPDATE subjects SET wikidata_id = NULL WHERE slug = 'jane-austen'").run();
+    expect(db.prepare('SELECT status FROM items WHERE id IN (?, ?) ORDER BY id').pluck().all(untitled, unlinked)).toEqual(['verified', 'verified']);
+    expect(itemsToEnrich(db, verticalId, 10)).toEqual([]);
+  });
+
+  it('offers quotes that failed less first, and stops offering a quote after too many failures unless asked', () => {
+    const { db, verticalId, quote } = setup();
+    const d1 = quote(DICKENS, 'It was the best of times, it was the worst of times, it was the age of wisdom.', 'A Tale of Two Cities');
+    const d2 = quote(DICKENS, 'There is a wisdom of the head, and a wisdom of the heart, and they are not the same.', 'Hard Times');
+    const a1 = quote(AUSTEN, 'It is a truth universally acknowledged, that a single man in possession of a good fortune must be in want of a wife.', 'Pride and Prejudice');
+    verifyVertical(db, verticalId, { now: NOW });
+
+    recordEnrichFailure(db, d1, 'Q5686 has no English Wikipedia article', NOW());
+    expect(itemsToEnrich(db, verticalId, 10).map((item) => item.itemId)).toEqual([a1, d2, d1]);
+    expect(db.prepare('SELECT item_id, reason, failed_at FROM enrich_failures').get()).toEqual({
+      item_id: d1,
+      reason: 'Q5686 has no English Wikipedia article',
+      failed_at: '2026-09-15T00:00:00.000Z',
+    });
+
+    for (let n = 1; n < MAX_ENRICH_FAILURES; n++) recordEnrichFailure(db, d1, 'still failing', NOW());
+    expect(itemsToEnrich(db, verticalId, 10).map((item) => item.itemId)).toEqual([a1, d2]);
+    expect(countGivenUp(db, verticalId)).toBe(1);
+    expect(itemsToEnrich(db, verticalId, 10, { retryFailed: true }).map((item) => item.itemId)).toEqual([a1, d2, d1]);
+  });
 });
 
 describe('insertPost', () => {
@@ -134,6 +167,19 @@ describe('insertPost', () => {
     ]);
     expect(JSON.parse(rounds[0]!.draft_json)).toEqual(round().draft);
     expect(JSON.parse(rounds[0]!.check_json)).toEqual({ sentences: [] });
+    expect(db.prepare('SELECT prompt_sha256 FROM post_rounds WHERE post_id = ? AND round = 1').pluck().get(postId)).toBe('a'.repeat(64));
+  });
+
+  it('writes nothing when a later insert in the transaction fails, such as two sources under one label', () => {
+    const { db, verticalId, quote } = setup();
+    const itemId = quote(DICKENS, 'It was the best of times, it was the worst of times, it was the age of wisdom.', 'A Tale of Two Cities');
+    verifyVertical(db, verticalId, { now: NOW });
+    const sources = post(itemId, verticalId).sources.map((source) => ({ ...source, label: 'S1' }));
+    expect(() => insertPost(db, post(itemId, verticalId, { sources }), NOW())).toThrow(/UNIQUE/);
+    expect(db.prepare('SELECT COUNT(*) FROM posts').pluck().get()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) FROM sources WHERE tier = 3').pluck().get()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) FROM post_sources').pluck().get()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) FROM post_rounds').pluck().get()).toBe(0);
   });
 
   it('refuses a post for a quote that is not verified, a draft whose last round has problems, and a second post', () => {
@@ -147,6 +193,9 @@ describe('insertPost', () => {
       'a draft post cannot have problems in its last round',
     );
     expect(() => insertPost(db, post(itemId, verticalId, { rounds: [] }), NOW())).toThrow('a post needs at least one round');
+    expect(() =>
+      insertPost(db, post(itemId, verticalId, { status: 'needs_review', rounds: [{ ...round(), round: 2 }, round(['a problem'])] }), NOW()),
+    ).toThrow('rounds must be numbered from 1, in order');
     expect(db.prepare('SELECT COUNT(*) FROM posts').pluck().get()).toBe(0);
     expect(db.prepare('SELECT COUNT(*) FROM sources WHERE tier = 3').pluck().get()).toBe(0);
 

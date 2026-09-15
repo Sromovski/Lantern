@@ -34,6 +34,14 @@ describe('articleParagraphs', () => {
     ]);
   });
 
+  it('keeps a paragraph the article repeats only once, so two labels never mean one stored source', () => {
+    const repeated = article('Charles Dickens', 'Q5686', [P(1), '', '', '== Legacy ==', '', P(1), P(2)].join('\n'));
+    expect(articleParagraphs(repeated, 10_000).map((p) => [p.section, p.text])).toEqual([
+      ['Lead', P(1)],
+      ['Legacy', P(2)],
+    ]);
+  });
+
   it('stops before the paragraph that would pass the character budget', () => {
     expect(articleParagraphs(DICKENS, 3 * P(1).length - 1).map((p) => p.text)).toEqual([P(1), P(2)]);
   });

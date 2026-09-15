@@ -79,6 +79,28 @@ describe('anthropicWriter', () => {
     expect((await anthropicWriter(client, 'claude-opus-5')('s', 'u')).model).toBe('claude-sonnet-5');
   });
 
+  it("reads only the answer after the last fallback block, not the declining model's partial output", async () => {
+    const fallback = { type: 'fallback', from: { model: 'claude-opus-5' }, to: { model: 'claude-sonnet-5' }, trigger: { type: 'refusal' } };
+    const { client } = await fakeApi([{ status: 200, body: message([text('{"hook":{"te'), fallback, text(DRAFT)]) }]);
+    expect(await anthropicWriter(client, 'claude-opus-5')('s', 'u')).toMatchObject({ value: JSON.parse(DRAFT), model: 'claude-sonnet-5' });
+  });
+
+  it('reports the fallback model from the usage entries when no fallback block precedes the answer', async () => {
+    const usage = (model: string, type: string) => ({ type, model, input_tokens: 1, output_tokens: 1, cache_creation: null, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+    const served = {
+      ...message([text(DRAFT)]),
+      usage: { input_tokens: 1200, output_tokens: 300, iterations: [usage('claude-opus-5', 'message'), usage('claude-sonnet-5', 'fallback_message')] },
+    };
+    const plain = { ...message([text(DRAFT)]), usage: { input_tokens: 1200, output_tokens: 300, iterations: [usage('claude-opus-5', 'message')] } };
+    const { client } = await fakeApi([
+      { status: 200, body: served },
+      { status: 200, body: plain },
+    ]);
+    const write = anthropicWriter(client, 'claude-opus-5');
+    expect((await write('s', 'u')).model).toBe('claude-sonnet-5');
+    expect((await write('s', 'u')).model).toBe('claude-opus-5');
+  });
+
   it('turns a refusal, a truncated answer or text that is not JSON into an EnrichResponseError', async () => {
     const { client } = await fakeApi([
       { status: 200, body: message([], 'refusal') },

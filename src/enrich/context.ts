@@ -33,10 +33,12 @@ const HEADING = /^(={2,})\s*(.*?)\s*\1$/;
 /**
  * An article's paragraphs in order, with their sections, until the next paragraph would take the total
  * past `maxChars`. The extracts API puts one paragraph on a line and headings as "== Name ==" (deeper
- * levels with more "="). Dropped sections and their subsections are skipped, and so are short lines.
+ * levels with more "="). Dropped sections and their subsections are skipped, and so are short lines and
+ * a repeat of an earlier paragraph (two labels must never mean the same stored source).
  */
 export function articleParagraphs(article: WikipediaArticle, maxChars: number): Omit<SourceParagraph, 'id'>[] {
   const dropped = new Set<string>(DROPPED_SECTIONS.map((name) => name.toLowerCase()));
+  const seen = new Set<string>();
   const paragraphs: Omit<SourceParagraph, 'id'>[] = [];
   let top = 'Lead';
   let section = 'Lead';
@@ -56,8 +58,9 @@ export function articleParagraphs(article: WikipediaArticle, maxChars: number): 
       }
       continue;
     }
-    if (dropping || line.length < MIN_PARAGRAPH_CHARS) continue;
+    if (dropping || line.length < MIN_PARAGRAPH_CHARS || seen.has(line)) continue;
     if (used + line.length > maxChars) break;
+    seen.add(line);
     used += line.length;
     paragraphs.push({ article, section, text: line });
   }

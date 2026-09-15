@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import type { z } from 'zod';
 import type { EnrichConfig } from '../config/schema.js';
 import type { Db } from '../db/connection.js';
-import { insertPost, itemsToEnrich, type ItemToEnrich, type PostRound } from '../db/posts.js';
+import { countGivenUp, insertPost, itemsToEnrich, recordEnrichFailure, type ItemToEnrich, type PostRound } from '../db/posts.js';
 import { SourceStatusError, type HttpGet } from '../harvest/sources.js';
 import type { Logger } from '../lib/log.js';
 import { EnrichResponseError, type EnrichPrompts, type ModelAnswer, type ModelFn } from './anthropic.js';
@@ -24,6 +25,8 @@ export interface EnrichOptions {
   prompts: EnrichPrompts;
   /** The most verified quotes to write posts for in one run. */
   limit: number;
+  /** Also offer quotes that have already failed MAX_ENRICH_FAILURES times. */
+  retryFailed?: boolean;
   now?: () => Date;
   log?: Logger;
 }
@@ -54,6 +57,8 @@ export interface EnrichReport {
   drafted: number;
   needsReview: number;
   failed: number;
+  /** Verified quotes without a post that are no longer offered because they failed too often (0 with retryFailed). */
+  givenUp: number;
   items: ItemReport[];
 }
 
@@ -70,24 +75,30 @@ interface Run {
   articles: Map<string, WikipediaArticle>;
 }
 
+const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+
 /**
  * Writes posts for a vertical's verified quotes (spec section 7, `lantern enrich`).
  *
- * For each verified quote without a post (authors taking turns, at most `limit`):
+ * For each verified quote without a post (fewest failed attempts first, then authors taking turns, at
+ * most `limit`):
  * 1. The author's Wikipedia article is found through their Wikidata id, and the work's through a
  *    Wikidata search for its title. Their paragraphs, labelled S1, S2, ..., are the only facts offered.
+ *    A collection, an ambiguous title, or a work article that does not load leaves the author's
+ *    article alone.
  * 2. The writer returns a hook, body paragraphs and a closer, each with the labels it relies on.
  * 3. The gates judge the draft: its shape and labels, every number against the quotation and the cited
- *    paragraphs, and a separate fact check of every sentence that sees only the cited paragraphs.
+ *    paragraphs, and a separate fact check of every sentence that sees only the quotation (with its work
+ *    and author) and the cited paragraphs.
  * 4. A draft with any problem gets one revision with the problems listed, judged the same way
  *    (user decision 2026-09-15).
  * 5. The post is stored as 'draft' when its last round has no problems and as 'needs_review' otherwise,
  *    with every round, and with the cited paragraphs as tier 3 sources of the quote.
  *
- * A quote whose articles cannot be read, or whose first draft or its fact check is refused or
- * unreadable, is reported as failed and gets no post, so the next run tries it again. A revision that
- * fails leaves the first round as a post to review. Any other error (a rejected API key, the network)
- * stops the run.
+ * A quote whose author article cannot be read, or whose first draft or its fact check is refused or
+ * unreadable, is reported as failed, gets no post, and has the failure recorded, so a later run tries it
+ * again until it has failed MAX_ENRICH_FAILURES times. A revision that fails leaves the first round as a
+ * post to review. Any other error (a rejected API key, the network) stops the run.
  */
 export async function enrichVertical(options: EnrichOptions): Promise<EnrichReport> {
   const run: Run = {
@@ -101,8 +112,9 @@ export async function enrichVertical(options: EnrichOptions): Promise<EnrichRepo
     },
     articles: new Map(),
   };
-  const items = itemsToEnrich(options.db, options.verticalId, options.limit);
-  const report: EnrichReport = { considered: items.length, drafted: 0, needsReview: 0, failed: 0, items: [] };
+  const retryFailed = options.retryFailed === true;
+  const items = itemsToEnrich(options.db, options.verticalId, options.limit, { retryFailed });
+  const report: EnrichReport = { considered: items.length, drafted: 0, needsReview: 0, failed: 0, givenUp: 0, items: [] };
   for (const item of items) {
     let outcome: ItemOutcome;
     try {
@@ -110,6 +122,7 @@ export async function enrichVertical(options: EnrichOptions): Promise<EnrichRepo
     } catch (err) {
       if (!(err instanceof WikiLookupError || err instanceof SourceStatusError || err instanceof EnrichResponseError)) throw err;
       outcome = { status: 'failed', reason: err.message };
+      recordEnrichFailure(options.db, item.itemId, err.message, run.now());
     }
     if (outcome.status === 'draft') report.drafted++;
     else if (outcome.status === 'needs_review') report.needsReview++;
@@ -117,6 +130,7 @@ export async function enrichVertical(options: EnrichOptions): Promise<EnrichRepo
     report.items.push({ itemId: item.itemId, author: item.author, workTitle: item.workTitle, outcome });
     options.log?.info('enrich item', { itemId: item.itemId, outcome });
   }
+  report.givenUp = retryFailed ? 0 : countGivenUp(options.db, options.verticalId);
   return report;
 }
 
@@ -137,7 +151,20 @@ async function sourceParagraphs(run: Run, item: ItemToEnrich): Promise<{ paragra
   const { get, endpoints, enrich } = run.options;
   const author = await article(run, item.wikidataId, () => authorArticleTitle(get, endpoints, item.wikidataId));
   const found = await workArticle(get, endpoints, item.wikidataId, item.workTitle);
-  const work = found === null || found.qid === item.wikidataId ? null : await article(run, found.qid, async () => found.title);
+  let work: WikipediaArticle | null = null;
+  if (found !== null && found.qid !== item.wikidataId) {
+    try {
+      work = await article(run, found.qid, async () => found.title);
+    } catch (err) {
+      if (!(err instanceof WikiLookupError || err instanceof SourceStatusError)) throw err;
+      // The work's sitelink led to a missing page or to another item's article: the author's article still stands.
+      run.options.log?.warn('enrich used the author article alone: the work article did not load', {
+        itemId: item.itemId,
+        work: found.title,
+        error: err.message,
+      });
+    }
+  }
   const paragraphs = labelParagraphs([
     articleParagraphs(author, enrich.author_article_chars),
     work === null ? [] : articleParagraphs(work, enrich.work_article_chars),
@@ -169,9 +196,17 @@ async function judgedRound(run: Run, item: ItemToEnrich, n: 1 | 2, system: strin
   const problems = [
     ...shapeProblems(draft, run.shape, new Set(paragraphs.map((paragraph) => paragraph.id)), item.body),
     ...numberProblems(draft, item.body, cited),
-    ...checkProblems(check, sentences),
+    ...checkProblems(check, sentences, new Set(cited.map((paragraph) => paragraph.id))),
   ];
-  return { round: n, draft, check, problems, writerModel: written.model, checkerModel: checked.model };
+  return {
+    round: n,
+    draft,
+    check,
+    problems,
+    writerModel: written.model,
+    checkerModel: checked.model,
+    promptSha256: sha256(`${system}\n\n${run.prompts.check}`),
+  };
 }
 
 async function enrichItem(run: Run, item: ItemToEnrich): Promise<ItemOutcome> {

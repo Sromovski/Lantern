@@ -54,8 +54,9 @@ function parseAnswer(role: string, stopReason: string | null, text: string): unk
 
 /**
  * The writer, backed by the Messages API with structured output built from draftSchema and server-side
- * fallback. The reported model is the one that wrote the text: the last fallback hop's model when a
- * fallback answered. Errors making the request (the key, the network, rate limits after the SDK's
+ * fallback. The reported model is the one that wrote the text: the model of the last `fallback_message`
+ * usage entry when a fallback served the response, else the last fallback block's model, else the
+ * requested model. Errors making the request (the key, the network, rate limits after the SDK's
  * retries) propagate and stop the run; only an unusable answer becomes an EnrichResponseError.
  */
 export function anthropicWriter(client: Anthropic, model: string): ModelFn {
@@ -71,11 +72,16 @@ export function anthropicWriter(client: Anthropic, model: string): ModelFn {
       messages: [{ role: 'user', content: user }],
       output_config: { format: { type: 'json_schema', schema }, effort: 'medium' },
     });
-    const text = response.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('');
-    const answeredBy = response.content.flatMap((block) => (block.type === 'fallback' ? [block.to.model] : [])).at(-1);
+    // A fallback block marks where a declining model's output gives way to the next model's: only what follows the last one is the answer.
+    const answer = response.content.slice(response.content.findLastIndex((block) => block.type === 'fallback') + 1);
+    const text = answer.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('');
+    // The SDK's signal that a fallback served the response is a `fallback_message` usage entry; a `fallback`
+    // content block appears only when a declining model had already produced output.
+    const servedBy = response.usage.iterations?.flatMap((entry) => (entry.type === 'fallback_message' ? [entry.model] : [])).at(-1);
+    const handedTo = response.content.flatMap((block) => (block.type === 'fallback' ? [block.to.model] : [])).at(-1);
     return {
       value: parseAnswer('writer', response.stop_reason, text),
-      model: answeredBy ?? response.model,
+      model: servedBy ?? handedTo ?? response.model,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
     };

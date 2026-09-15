@@ -74,10 +74,11 @@ interface EntityInfo {
 async function entityInfo(get: HttpGet, endpoints: WikiEndpoints, ids: readonly string[]): Promise<Map<string, EntityInfo>> {
   const { data } = await getJson(get, entitiesUrl(endpoints, ids), 'wikidata', entitiesSchema);
   const info = new Map<string, EntityInfo>();
-  for (const entity of Object.values(data.entities)) {
+  // Keyed by the id asked for: a merged id answers under its old key with the new id inside.
+  for (const [requested, entity] of Object.entries(data.entities)) {
     const labels = Array.isArray(entity.labels) ? undefined : entity.labels;
     const sitelinks = Array.isArray(entity.sitelinks) ? undefined : entity.sitelinks;
-    info.set(entity.id, { label: labels?.['en']?.value ?? null, enwiki: sitelinks?.['enwiki']?.title ?? null });
+    info.set(requested, { label: labels?.['en']?.value ?? null, enwiki: sitelinks?.['enwiki']?.title ?? null });
   }
   return info;
 }
@@ -90,9 +91,16 @@ export async function authorArticleTitle(get: HttpGet, endpoints: WikiEndpoints,
   return title;
 }
 
-/** The part of a Gutendex title that names the work: before any subtitle, without a trailing ", Complete". */
+/** A Gutendex title naming several works ("A; B", "A, and Other Stories"). */
+const COLLECTION = /;|\band other\b/i;
+
+/**
+ * The part of a Gutendex title that names the work: before any subtitle, without a trailing ", Complete".
+ * Empty for a collection, since a quote from it could come from any of its works and no one article fits.
+ */
 export function workSearchTitle(workTitle: string): string {
-  return (workTitle.split(/[:;]/)[0] ?? '')
+  if (COLLECTION.test(workTitle)) return '';
+  return (workTitle.split(':')[0] ?? '')
     .replace(/,\s*complete\s*$/i, '')
     .replace(/"/g, '')
     .trim();
@@ -120,9 +128,10 @@ export interface WorkArticle {
 }
 
 /**
- * The Wikipedia article about a work: the first Wikidata item by the author (P50) found for the work's
- * title whose English label is that title and which has an English article. Editions and translations
- * have no English label or article, so they never match. Null when nothing matches.
+ * The Wikipedia article about a work: the one Wikidata item by the author (P50) found for the work's title
+ * whose English label is that title and which has an English article. Editions and translations have no
+ * English label or article, so they never match. Null when nothing matches, when more than one item does
+ * (the quote's work is then unknown), and for a collection.
  */
 export async function workArticle(get: HttpGet, endpoints: WikiEndpoints, authorQid: string, workTitle: string): Promise<WorkArticle | null> {
   if (!QID.test(authorQid)) throw new WikiLookupError(`${authorQid} is not a Wikidata id`);
@@ -133,11 +142,11 @@ export async function workArticle(get: HttpGet, endpoints: WikiEndpoints, author
   if (hits.length === 0) return null;
   const entities = await entityInfo(get, endpoints, hits);
   const wanted = foldTitle(title);
-  for (const qid of hits) {
+  const matches = hits.flatMap((qid) => {
     const entity = entities.get(qid);
-    if (entity?.enwiki != null && entity.label !== null && foldTitle(entity.label) === wanted) return { qid, title: entity.enwiki };
-  }
-  return null;
+    return entity?.enwiki != null && entity.label !== null && foldTitle(entity.label) === wanted ? [{ qid, title: entity.enwiki }] : [];
+  });
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 export function articleUrl(endpoints: WikiEndpoints, title: string): string {

@@ -89,10 +89,12 @@ describe('Wikidata and Wikipedia requests', () => {
     expect(revisionUrl(E, 'A Tale of Two Cities', 1374830091)).toBe('https://en.wikipedia.org/w/index.php?title=A_Tale_of_Two_Cities&oldid=1374830091');
   });
 
-  it('names the work as Gutendex titles it: before a subtitle, without ", Complete"', () => {
+  it('names the work as Gutendex titles it: before a subtitle, without ", Complete", and not at all for a collection', () => {
     expect(workSearchTitle('Salom\u00E9: A Tragedy in One Act')).toBe('Salom\u00E9');
     expect(workSearchTitle('The Adventures of Tom Sawyer, Complete')).toBe('The Adventures of Tom Sawyer');
-    expect(workSearchTitle("Lord Arthur Savile's Crime; The Portrait of Mr. W.H., and Other Stories")).toBe("Lord Arthur Savile's Crime");
+    expect(workSearchTitle("Lord Arthur Savile's Crime; The Portrait of Mr. W.H., and Other Stories")).toBe('');
+    expect(workSearchTitle('The $30,000 Bequest, and Other Stories')).toBe('');
+    expect(workSearchTitle('Poems, with The Ballad of Reading Gaol')).toBe('Poems, with The Ballad of Reading Gaol');
     expect(workSearchTitle('A Tale of Two Cities')).toBe('A Tale of Two Cities');
     expect(foldTitle('Salom\u00E9')).toBe(foldTitle('Salome'));
     expect(foldTitle('Lady Windermere\u2019s  Fan')).toBe("lady windermere's fan");
@@ -103,6 +105,16 @@ describe('authorArticleTitle', () => {
   it('reads the English Wikipedia title from the Wikidata sitelink', async () => {
     const { get } = await wiki({ [pathOf(entitiesUrl(E, ['Q5686']))]: entities(entity('Q5686', 'Charles Dickens', 'Charles Dickens')) });
     expect(await authorArticleTitle(get, E, 'Q5686')).toBe('Charles Dickens');
+  });
+
+  it('reads a merged id under the id asked for, so the article check names both ids', async () => {
+    const { get } = await wiki({
+      [pathOf(entitiesUrl(E, ['Q100']))]: { entities: { Q100: entity('Q200', 'Merged Author', 'Merged Author') }, success: 1 },
+      [pathOf(articleUrl(E, 'Merged Author'))]: page('Merged Author', 'Q200', 'Merged Author was a writer of many long and forgotten books.', 5),
+    });
+    const title = await authorArticleTitle(get, E, 'Q100');
+    expect(title).toBe('Merged Author');
+    await expect(fetchArticle(get, E, title, 'Q100')).rejects.toThrow('the Wikipedia article Merged Author is Q200, not Q100');
   });
 
   it('refuses an entity without an English article, and reports a Wikidata error without caching it', async () => {
@@ -119,13 +131,13 @@ describe('authorArticleTitle', () => {
 });
 
 describe('workArticle', () => {
-  it('takes the first hit whose English label is the title and that has an English article', async () => {
+  it('takes the one hit whose English label is the title and that has an English article', async () => {
     const { get } = await wiki({
       [pathOf(workSearchUrl(E, 'Q5686', 'A Tale of Two Cities'))]: search(...TALE_HITS),
       [pathOf(entitiesUrl(E, TALE_HITS))]: entities(
         entity('Q138515577', null, null),
         entity('Q308918', 'A Tale of Two Cities', 'A Tale of Two Cities'),
-        entity('Q4659960', 'A Tale of Two Cities', 'A Tale of Two Cities (musical)'),
+        entity('Q4659960', 'A Tale of Two Cities', null),
       ),
     });
     expect(await workArticle(get, E, 'Q5686', 'A Tale of Two Cities')).toEqual({ qid: 'Q308918', title: 'A Tale of Two Cities' });
@@ -137,6 +149,16 @@ describe('workArticle', () => {
       [pathOf(entitiesUrl(E, ['Q64917984', 'Q1149498']))]: entities(entity('Q64917984', 'Salom\u00E9', null), entity('Q1149498', 'Salome', 'Salome (play)')),
     });
     expect(await workArticle(get, E, 'Q30875', 'Salom\u00E9: A Tragedy in One Act')).toEqual({ qid: 'Q1149498', title: 'Salome (play)' });
+  });
+
+  it('returns null for two matching works, and asks nothing for a collection', async () => {
+    const { get, hits } = await wiki({
+      [pathOf(workSearchUrl(E, 'Q7245', 'Sketches'))]: search('Q1', 'Q2'),
+      [pathOf(entitiesUrl(E, ['Q1', 'Q2']))]: entities(entity('Q1', 'Sketches', 'Sketches (1870)'), entity('Q2', 'Sketches', 'Sketches (1875)')),
+    });
+    expect(await workArticle(get, E, 'Q7245', 'Sketches')).toBeNull();
+    expect(await workArticle(get, E, 'Q30875', "Lord Arthur Savile's Crime; The Portrait of Mr. W.H., and Other Stories")).toBeNull();
+    expect(hits).toHaveLength(2);
   });
 
   it('returns null when the search finds nothing, or nothing it finds matches', async () => {

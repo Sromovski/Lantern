@@ -79,8 +79,11 @@ export function numberProblems(draft: Draft, quotation: string, cited: readonly 
   );
 }
 
-/** Sentences the checker found unsupported, and any sentence it did not judge exactly once (fail closed). */
-export function checkProblems(check: Check, sentences: readonly DraftSentence[]): string[] {
+/**
+ * Sentences the checker found unsupported, any sentence it did not judge exactly once, and any fact it
+ * called supported without naming the quotation (Q) or a paragraph the draft cites (fail closed).
+ */
+export function checkProblems(check: Check, sentences: readonly DraftSentence[], cited: ReadonlySet<string>): string[] {
   const problems: string[] = [];
   for (const sentence of sentences) {
     const verdicts = check.sentences.filter((verdict) => verdict.id === sentence.n);
@@ -89,6 +92,8 @@ export function checkProblems(check: Check, sentences: readonly DraftSentence[])
       problems.push(`the fact check gave ${verdicts.length} verdicts for "${sentence.text}"`);
     } else if (!verdict.supported) {
       problems.push(`"${sentence.text}" is not supported by the source paragraphs: ${verdict.problem.trim() || 'the fact check gave no detail'}`);
+    } else if (verdict.kind === 'fact' && !verdict.sources.some((label) => label === 'Q' || cited.has(label))) {
+      problems.push(`"${sentence.text}" was judged a supported fact without naming the quotation or a cited paragraph that supports it`);
     }
   }
   const numbers = new Set(sentences.map((sentence) => sentence.n));

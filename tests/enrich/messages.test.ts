@@ -77,7 +77,7 @@ describe('model messages', () => {
       [
         'Source paragraphs:',
         '',
-        '[Q] (the quotation, from the book) It was the best of times.',
+        '[Q] (the quotation, from A Tale of Two Cities by Charles Dickens) It was the best of times.',
         '',
         '[S2] (Charles Dickens: Early life) Dickens was born in Portsmouth.',
         '',

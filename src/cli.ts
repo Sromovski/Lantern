@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { loadConfig } from './config/load.js';
 import { openDb, type Db } from './db/connection.js';
 import { migrate, pendingMigrations } from './db/migrate.js';
+import { MAX_ENRICH_FAILURES } from './db/posts.js';
 import { syncConfig } from './db/sync.js';
 import { runChecks } from './doctor/checks.js';
 import { exitCode, formatReport } from './doctor/report.js';
@@ -57,7 +58,7 @@ function cachedGet(refresh: boolean) {
     refresh,
     http: {
       userAgent: buildUserAgent(process.env.LANTERN_CONTACT, USER_AGENT_VERSION),
-      // Gutendex can take more than a minute to answer a search.
+      // Gutendex can take more than a minute to answer a search; Wikidata and Wikipedia answer far sooner.
       timeoutMs: 180_000,
       onRetry: (event) => log.warn('http retry', { ...event, url: redactUrl(event.url) }),
     },
@@ -160,7 +161,8 @@ program
   .requiredOption('--vertical <slug>', 'the vertical to enrich')
   .option('--limit <n>', 'write posts for at most this many verified quotes', '5')
   .option('--refresh', 'ignore cached Wikidata and Wikipedia responses and fetch again')
-  .action(async (opts: { vertical: string; limit: string; refresh?: boolean }) => {
+  .option('--retry-failed', `also try quotes that have already failed ${MAX_ENRICH_FAILURES} times`)
+  .action(async (opts: { vertical: string; limit: string; refresh?: boolean; retryFailed?: boolean }) => {
     const limit = Number(opts.limit);
     if (!Number.isInteger(limit) || limit < 1) throw new Error(`--limit must be a positive integer, got ${opts.limit}`);
     const db = openMigratedDb();
@@ -170,8 +172,9 @@ program
     if (!process.env.ANTHROPIC_API_KEY?.trim()) throw new Error('ANTHROPIC_API_KEY is not set; the writer and the fact check need it');
     const prompts = loadEnrichPrompts(paths.root, vertical.slug);
 
-    // A writer call can think for minutes before it answers. A call only reads, so retrying it is safe.
-    const client = new Anthropic({ timeout: 300_000, maxRetries: 2 });
+    // A writer call can think for minutes before it answers (the SDK estimates up to 450 s for 16000 tokens).
+    // A call only reads, so retrying it is safe.
+    const client = new Anthropic({ timeout: 600_000, maxRetries: 2 });
     const report = await runStage(db, { stage: 'enrich', verticalId }, () =>
       enrichVertical({
         db,
@@ -184,11 +187,15 @@ program
         check: anthropicChecker(client, enrich.checker_model),
         prompts,
         limit,
+        retryFailed: opts.retryFailed === true,
         log,
       }),
     );
     for (const item of report.items) console.log(describeItem(item));
     console.log(`posts: ${report.drafted} draft, ${report.needsReview} needs review; failed: ${report.failed}`);
+    if (report.givenUp > 0) {
+      console.log(`given up after ${MAX_ENRICH_FAILURES} failed attempts: ${report.givenUp} (run with --retry-failed to try them again)`);
+    }
     if (report.failed > 0) process.exitCode = 1;
   });
 
