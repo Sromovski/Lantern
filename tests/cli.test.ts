@@ -15,6 +15,7 @@ interface LanternOpts {
   root?: string | null; // null omits LANTERN_ROOT from the child env
   db?: string | null; // null omits LANTERN_DB from the child env
   logs?: string | null; // null omits LANTERN_LOGS from the child env
+  env?: Record<string, string>; // extra child env, applied last
 }
 
 function lantern(args: string[], scratch: string, opts: LanternOpts = {}) {
@@ -37,6 +38,8 @@ function lantern(args: string[], scratch: string, opts: LanternOpts = {}) {
   const logs = 'logs' in opts ? opts.logs : join(scratch, 'logs');
   if (logs === null) delete env.LANTERN_LOGS;
   else env.LANTERN_LOGS = logs;
+
+  Object.assign(env, opts.env ?? {});
 
   const res = spawnSync(process.execPath, ['--import', TSX_LOADER, join(ROOT, 'src', 'cli.ts'), ...args], {
     cwd: opts.cwd ?? ROOT,
@@ -135,5 +138,43 @@ describe('lantern CLI', () => {
     expect(res.code).toBe(0);
     expect(res.out).toContain('Usage: lantern');
     expect(logRecords(join(scratch, 'logs')).filter((r) => r.level === 'error')).toEqual([]);
+  }, 30_000);
+
+  it('harvest refuses a database with pending migrations before anything else', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    const res = lantern(['harvest', '--vertical', 'literature'], scratch, { env: { ANTHROPIC_API_KEY: '' } });
+    expect(res.code).toBe(1);
+    expect(res.out).toContain('run lantern migrate');
+  }, 30_000);
+
+  it('harvest refuses a vertical without a harvest section, and a missing API key, without fetching anything', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    expect(lantern(['migrate'], scratch).code).toBe(0);
+    const science = lantern(['harvest', '--vertical', 'science-curious'], scratch, { env: { ANTHROPIC_API_KEY: '' } });
+    expect(science.code).toBe(1);
+    expect(science.out).toContain('vertical science-curious has no harvest section');
+    const noKey = lantern(['harvest', '--vertical', 'literature'], scratch, { env: { ANTHROPIC_API_KEY: '' } });
+    expect(noKey.code).toBe(1);
+    expect(noKey.out).toContain('ANTHROPIC_API_KEY is not set');
+    expect(existsSync(join(scratch, 'cache'))).toBe(false);
+  }, 30_000);
+
+  it('harvest and verify refuse an unknown vertical', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    expect(lantern(['migrate'], scratch).code).toBe(0);
+    for (const command of ['harvest', 'verify']) {
+      const res = lantern([command, '--vertical', 'poetry'], scratch, { env: { ANTHROPIC_API_KEY: '' } });
+      expect(res.code).toBe(1);
+      expect(res.out).toContain('unknown vertical: poetry');
+    }
+  }, 30_000);
+
+  it('verify decides nothing on an empty database and records the stage', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    expect(lantern(['migrate'], scratch).code).toBe(0);
+    const res = lantern(['verify', '--vertical', 'literature'], scratch);
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('verified: 0');
+    expect(res.out).toContain('left raw: 0 without a Wikiquote check, 0 with malformed evidence');
   }, 30_000);
 });
