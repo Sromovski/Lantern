@@ -65,6 +65,72 @@ export function countGivenUp(db: Db, verticalId: number): number {
     .get(verticalId, MAX_ENRICH_FAILURES) as number;
 }
 
+export interface PostForCaption {
+  postId: number;
+  verticalId: number;
+  status: string;
+  /** The post's own editorial prose, which is what a caption is built from. */
+  hook: string;
+  /** Body paragraphs separated by a blank line. */
+  body: string;
+  closer: string;
+  /**
+   * The quotation, exactly as the source prints it. Named `quotation` rather than `body` on purpose:
+   * PostToCompose calls the quotation `body`, and confusing the two would put the quote where the
+   * write-up belongs.
+   */
+  quotation: string;
+  workTitle: string;
+  workYear: number | null;
+  author: string;
+  /** Null when the media stage has not run; 'generated' is what obliges a caption to disclose (spec section 9). */
+  imageLicense: string | null;
+}
+
+/** The one post a caption run is about: its approved prose, the quotation it is about, and its image's licence. */
+export function postForCaption(db: Db, postId: number): PostForCaption | undefined {
+  return db
+    .prepare(
+      `SELECT p.id AS postId, p.vertical_id AS verticalId, p.status, p.hook, p.body, p.closer,
+              i.body AS quotation, i.work_title AS workTitle, i.work_year AS workYear,
+              s.name AS author, im.license AS imageLicense
+       FROM posts p
+       JOIN items i ON i.id = p.item_id
+       JOIN subjects s ON s.id = i.subject_id
+       LEFT JOIN images im ON im.id = p.image_id
+       WHERE p.id = ?`,
+    )
+    .get(postId) as PostForCaption | undefined;
+}
+
+export interface CitedSource {
+  /** The label the post's drafts cite it by (S1, S2, ...). */
+  label: string;
+  tier: number;
+  url: string | null;
+  citation: string;
+  excerpt: string | null;
+}
+
+/**
+ * The sources a post's drafts cited, under the labels they used.
+ *
+ * Nothing has read `post_sources` back before now: enrichment writes it and never looks again. A
+ * caption that is not a pure truncation is judged against exactly these, so the caption gate sees
+ * the same evidence the post was written from and no more (spec section 7).
+ */
+export function postCitedSources(db: Db, postId: number): CitedSource[] {
+  return db
+    .prepare(
+      `SELECT ps.label, so.tier, so.url, so.citation, so.excerpt
+       FROM post_sources ps
+       JOIN sources so ON so.id = ps.source_id
+       WHERE ps.post_id = ?
+       ORDER BY ps.label`,
+    )
+    .all(postId) as CitedSource[];
+}
+
 export interface PostToCompose {
   postId: number;
   verticalId: number;
