@@ -27,16 +27,18 @@ const folded = (text: string): string => normalizeText(text);
  * stitches two approved clauses together can imply something neither of them said.
  */
 export function unapprovedSentences(caption: string, approved: string): string[] {
-  // Each approved sentence is normalised on its own, and a caption sentence must match one of them
-  // whole. Comparing against the joined text instead would dissolve the sentence boundaries:
-  // normalizeText strips end punctuation, so "He ran a magazine. In 1859 he wrote it." becomes one
-  // run, and a caption claiming "He ran a magazine in 1859" - which no approved sentence says -
-  // would be found inside it and ship unchecked. That fusion is the exact danger this gate exists
-  // to catch.
-  const allowed = new Set([...BOILERPLATE, ...splitSentences(approved)].map(folded).filter((text) => text !== ''));
+  // A caption sentence must be a whole approved sentence, or the start of one. Truncating to a
+  // channel's limit leaves a prefix, which introduces no claim and needs no check. A stitch is a
+  // prefix of nothing: it runs past the end of one approved sentence into the next, which is how
+  // "He ran a weekly magazine. In 1859 he wrote the line." could otherwise yield "He ran a weekly
+  // magazine in 1859" - a claim neither sentence makes. Comparing against the joined text instead
+  // would miss that entirely, because normalizeText strips the end punctuation between them.
+  const exact = new Set(BOILERPLATE.map(folded));
+  const sentences = splitSentences(approved).map(folded).filter((text) => text !== '');
   return splitSentences(caption).filter((sentence) => {
     const needle = folded(sentence);
-    return needle !== '' && !allowed.has(needle);
+    if (needle === '' || exact.has(needle)) return false;
+    return !sentences.some((approvedSentence) => approvedSentence === needle || approvedSentence.startsWith(needle));
   });
 }
 

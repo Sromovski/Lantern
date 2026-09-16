@@ -30,8 +30,15 @@ describe('unapprovedSentences', () => {
     expect(unapprovedSentences(stitched, APPROVED)).toEqual([stitched]);
   });
 
-  it('ignores differences in whitespace only', () => {
-    expect(unapprovedSentences('Dickens   wrote the line\nin 1859.', APPROVED)).toEqual([]);
+  it('ignores differences in spacing within a sentence', () => {
+    expect(unapprovedSentences('Dickens   wrote   the line in 1859.', APPROVED)).toEqual([]);
+  });
+
+  it('accepts a sentence cut short, since a truncation adds no claim', () => {
+    // Pinterest's title is a word-boundary cut of the hook, so prefixes must pass or every pin
+    // would cost a fact check for text that is plainly approved.
+    expect(unapprovedSentences('Dickens wrote the line', APPROVED)).toEqual([]);
+    expect(unapprovedSentences('Dickens wrote', APPROVED)).toEqual([]);
   });
 
   it('catches a sentence stitched across two approved sentences', () => {
