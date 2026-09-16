@@ -1,6 +1,11 @@
 import { normalizeText } from '../verify/normalize.js';
 import { splitSentences } from '../enrich/draft.js';
 
+/** A channel whose limits cannot produce a valid caption. Fail closed rather than publish a broken one. */
+export class CaptionConfigError extends Error {
+  override name = 'CaptionConfigError';
+}
+
 /**
  * Text a caption may contain that is not drawn from the post.
  *

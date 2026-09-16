@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { BOILERPLATE, fitSentences, joinParagraphs, truncateAtWord, unapprovedSentences } from '../../src/caption/text.js';
+import { BOILERPLATE, CaptionConfigError, fitSentences, joinParagraphs, truncateAtWord, unapprovedSentences } from '../../src/caption/text.js';
+import { facebookCaption } from '../../src/caption/facebook.js';
+import { pinterestCaption } from '../../src/caption/pinterest.js';
 
 const APPROVED = [
   'Dickens wrote the line in 1859.',
@@ -80,5 +82,39 @@ describe('truncateAtWord', () => {
 describe('joinParagraphs', () => {
   it('separates parts with a blank line and drops empty ones', () => {
     expect(joinParagraphs(['hook', '', '  ', 'closer'])).toBe('hook\n\ncloser');
+  });
+});
+
+describe('a channel whose limit cannot hold the disclosure', () => {
+  const post = {
+    postId: 1,
+    verticalId: 1,
+    status: 'draft',
+    hook: 'Dickens opened his new weekly with a sentence that refuses to settle.',
+    body: 'The first instalment ran in April 1859.',
+    closer: 'Read it and see.',
+    quotation: 'q',
+    workTitle: 'W',
+    workYear: 1859,
+    author: 'Charles Dickens',
+    imageLicense: 'generated',
+  };
+
+  it('refuses rather than emitting a caption longer than the limit', () => {
+    // Measured before this guard existed: textMax 10 produced 28 characters, being the two-newline
+    // join plus the disclosure, with no prose at all. Over the limit and meaningless.
+    expect(() => facebookCaption(post, { textMax: 10, titleMax: undefined })).toThrow(CaptionConfigError);
+    expect(() => pinterestCaption(post, { textMax: 10, titleMax: 100 })).toThrow(CaptionConfigError);
+  });
+
+  it('still builds when the limit has room for the disclosure', () => {
+    const built = facebookCaption(post, { textMax: 2000, titleMax: undefined });
+    expect([...built.text].length).toBeLessThanOrEqual(2000);
+    expect(built.text).toContain('Illustration: AI-generated');
+  });
+
+  it('is not triggered when the post has no generated image', () => {
+    const plain = { ...post, imageLicense: 'public-domain' };
+    expect([...facebookCaption(plain, { textMax: 10, titleMax: undefined }).text].length).toBeLessThanOrEqual(10);
   });
 });

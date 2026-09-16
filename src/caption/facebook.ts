@@ -1,5 +1,5 @@
 import type { PostForCaption } from '../db/posts.js';
-import { BOILERPLATE, fitSentences, joinParagraphs } from './text.js';
+import { BOILERPLATE, CaptionConfigError, fitSentences, joinParagraphs } from './text.js';
 
 export interface CaptionLimits {
   /** The channel's cap on the caption body. */
@@ -33,6 +33,11 @@ export function disclosureFor(imageLicense: string | null): string | null {
 export function facebookCaption(post: PostForCaption, limits: CaptionLimits): BuiltCaption {
   const disclosure = disclosureFor(post.imageLicense);
   const reserved = disclosure === null ? 0 : [...disclosure].length + 2;
+  if (disclosure !== null && limits.textMax <= reserved) {
+    throw new CaptionConfigError(
+      `a channel with text_max ${limits.textMax} cannot carry the ${[...disclosure].length}-character AI disclosure this image requires`,
+    );
+  }
   const prose = fitSentences(joinParagraphs([post.hook, post.body, post.closer]), Math.max(0, limits.textMax - reserved));
   return {
     title: null,

@@ -1,12 +1,7 @@
 import type { PostForCaption } from '../db/posts.js';
 import type { BuiltCaption, CaptionLimits } from './facebook.js';
 import { disclosureFor } from './facebook.js';
-import { fitSentences, joinParagraphs, truncateAtWord } from './text.js';
-
-/** Pinterest without a title_max would silently publish an over-long title, so the channel must declare one. */
-export class CaptionConfigError extends Error {
-  override name = 'CaptionConfigError';
-}
+import { CaptionConfigError, fitSentences, joinParagraphs, truncateAtWord } from './text.js';
 
 /**
  * Pinterest's pin: a title, a description, and no link yet.
@@ -25,6 +20,11 @@ export function pinterestCaption(post: PostForCaption, limits: CaptionLimits): B
   }
   const disclosure = disclosureFor(post.imageLicense);
   const reserved = disclosure === null ? 0 : [...disclosure].length + 2;
+  if (disclosure !== null && limits.textMax <= reserved) {
+    throw new CaptionConfigError(
+      `a channel with text_max ${limits.textMax} cannot carry the ${[...disclosure].length}-character AI disclosure this image requires`,
+    );
+  }
   const description = fitSentences(joinParagraphs([post.body, post.closer]), Math.max(0, limits.textMax - reserved));
   return {
     title: truncateAtWord(post.hook.trim(), limits.titleMax),
