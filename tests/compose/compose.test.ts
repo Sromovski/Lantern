@@ -190,6 +190,38 @@ describe('composePost', () => {
     expect(db.prepare('SELECT alt_text FROM posts WHERE id = ?').pluck().get(only)).toBe(PLACEHOLDER);
   });
 
+  it('leaves the alt text of an approved post alone', async () => {
+    // Once a human has approved a post, its alt text may have been corrected in review. The media
+    // stage refuses to touch an approved post for the same reason (spec sections 7 and 10).
+    db.prepare("UPDATE posts SET status = 'approved' WHERE id = ?").run(postId);
+
+    const report = await run(['square']);
+
+    expect(report.written).toBe(1);
+    expect(db.prepare('SELECT alt_text FROM posts WHERE id = ?').pluck().get(postId)).toBe(PLACEHOLDER);
+  });
+
+  it('says a post has no subject rather than claiming it does not exist', async () => {
+    const id = (sql: string, ...params: unknown[]) => Number(db.prepare(sql).run(...params).lastInsertRowid);
+    const verticalId = db.prepare("SELECT id FROM verticals WHERE slug = 'literature'").pluck().get() as number;
+    const itemId = id(
+      `INSERT INTO items (vertical_id, subject_id, kind, body, body_hash, work_title, work_year, status, created_at)
+       VALUES (?, NULL, 'quote', 'A quote whose item has no subject.', 'hash-no-subject', 'A Work', 1860, 'raw', ?)`,
+      verticalId,
+      NOW.toISOString(),
+    );
+    const orphan = id(
+      `INSERT INTO posts (item_id, vertical_id, image_id, hook, body, closer, alt_text, status, created_at)
+       VALUES (?, ?, NULL, 'A hook', 'A body', 'A closer', ?, 'draft', ?)`,
+      itemId,
+      verticalId,
+      PLACEHOLDER,
+      NOW.toISOString(),
+    );
+
+    await expect(run(['square'], orphan)).rejects.toThrow(`post ${orphan} has no subject`);
+  });
+
   it('refuses a post that has no image yet', async () => {
     const imageless = seed(`${QUOTE} And this one has no portrait.`, false);
     await expect(run(['square'], imageless)).rejects.toThrow(ComposeError);
