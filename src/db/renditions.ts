@@ -15,16 +15,6 @@ export interface NewRendition {
   error: string | null;
 }
 
-export interface StoredRendition {
-  id: number;
-  format: string;
-  localPath: string;
-  width: number;
-  height: number;
-  bytes: number | null;
-  status: string;
-}
-
 /**
  * Writes one format's rendition, replacing the row that format already has.
  *
@@ -60,16 +50,4 @@ export function upsertRendition(db: Db, rendition: NewRendition, now: Date = new
     now.toISOString(),
   );
   return db.prepare('SELECT id FROM renditions WHERE post_id = ? AND format = ?').pluck().get(rendition.postId, rendition.format) as number;
-}
-
-/** Every rendition a post has, for the review UI and for deciding what compose still owes it. */
-export function postRenditions(db: Db, postId: number): StoredRendition[] {
-  return db
-    .prepare(
-      `SELECT id, format, local_path AS localPath, width, height, bytes, status
-       FROM renditions
-       WHERE post_id = ?
-       ORDER BY format`,
-    )
-    .all(postId) as StoredRendition[];
 }

@@ -244,8 +244,6 @@ describe('lantern CLI', () => {
     expect(pending.code).toBe(1);
     expect(pending.out).toContain('run lantern migrate');
 
-    expect(lantern(['migrate'], scratch).code).toBe(0);
-
     // The format list is checked before any post is read, so a typo costs nothing.
     const unknownFormat = lantern(['compose', '--post', '1', '--formats', 'square,poster'], scratch);
     expect(unknownFormat.code).toBe(1);
@@ -254,6 +252,8 @@ describe('lantern CLI', () => {
     const empty = lantern(['compose', '--post', '1', '--formats', ' , '], scratch);
     expect(empty.code).toBe(1);
     expect(empty.out).toContain('--formats must name at least one format');
+
+    expect(lantern(['migrate'], scratch).code).toBe(0);
 
     const missing = lantern(['compose', '--post', '1'], scratch, { env: { LANTERN_MEDIA: join(scratch, 'media') } });
     expect(missing.code).toBe(1);

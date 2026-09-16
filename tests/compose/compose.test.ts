@@ -139,6 +139,16 @@ describe('composePost', () => {
     }
   });
 
+  it('actually draws the text onto the portrait', async () => {
+    // The fixture portrait is one flat colour, so a card with nothing composited over it has zero
+    // variance. Removing the composite step must fail this test - and nothing else in this file
+    // would notice, because no other assertion looks at a pixel.
+    await run(['square']);
+    const stats = await sharp(join(mediaDir, renditionPath(postId, 'square'))).stats();
+    const spread = Math.max(...stats.channels.map((channel) => channel.stdev));
+    expect(spread).toBeGreaterThan(5);
+  });
+
   it('replaces only the format it regenerates when it runs again', async () => {
     await run(['square', 'pin']);
     const before = db.prepare('SELECT id, format FROM renditions ORDER BY format').all() as { id: number; format: string }[];

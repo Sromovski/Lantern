@@ -1,4 +1,4 @@
-import type { RenditionFormat } from '../config/schema.js';
+import type { ImageRenditionFormat } from '../config/schema.js';
 
 export interface FormatSpec {
   /** The exact pixel width every rendition of this format has. */
@@ -17,7 +17,7 @@ export interface FormatSpec {
 export const IMAGE_FORMATS = {
   square: { width: 1200, height: 1200, aspect: '1:1' },
   pin: { width: 1000, height: 1500, aspect: '2:3' },
-} as const satisfies Partial<Record<RenditionFormat, FormatSpec>>;
+} as const satisfies Record<ImageRenditionFormat, FormatSpec>;
 
 export type ImageFormat = keyof typeof IMAGE_FORMATS;
 
