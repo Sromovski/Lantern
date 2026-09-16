@@ -229,4 +229,34 @@ describe('lantern CLI', () => {
     expect(res.out).toContain('images: 0 downloaded, 0 reused; failed: 0');
     expect(existsSync(media)).toBe(false);
   }, 60_000);
+
+  it('compose refuses a bad post id, an unknown format, pending migrations and a post that does not exist', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    const badPost = lantern(['compose', '--post', '0'], scratch);
+    expect(badPost.code).toBe(1);
+    expect(badPost.out).toContain('--post must be a positive integer, got 0');
+
+    const notANumber = lantern(['compose', '--post', 'seven'], scratch);
+    expect(notANumber.code).toBe(1);
+    expect(notANumber.out).toContain('--post must be a positive integer, got seven');
+
+    const pending = lantern(['compose', '--post', '1'], scratch);
+    expect(pending.code).toBe(1);
+    expect(pending.out).toContain('run lantern migrate');
+
+    expect(lantern(['migrate'], scratch).code).toBe(0);
+
+    // The format list is checked before any post is read, so a typo costs nothing.
+    const unknownFormat = lantern(['compose', '--post', '1', '--formats', 'square,poster'], scratch);
+    expect(unknownFormat.code).toBe(1);
+    expect(unknownFormat.out).toContain('unknown format: poster; expected square, pin');
+
+    const empty = lantern(['compose', '--post', '1', '--formats', ' , '], scratch);
+    expect(empty.code).toBe(1);
+    expect(empty.out).toContain('--formats must name at least one format');
+
+    const missing = lantern(['compose', '--post', '1'], scratch, { env: { LANTERN_MEDIA: join(scratch, 'media') } });
+    expect(missing.code).toBe(1);
+    expect(missing.out).toContain('post 1 does not exist');
+  }, 60_000);
 });

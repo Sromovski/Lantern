@@ -574,7 +574,13 @@ summary rather than passed over in silence.
 **`lantern compose --post 123 --formats square,pin`**
 Render image renditions with Sharp from the post's source image + text. One
 `renditions` row per format. Safe to re-run; regenerating a format replaces that
-row only.
+row only, and `--formats` defaults to the vertical's `compose.formats`. Every
+character is drawn as a glyph outline from a font bundled in `assets/fonts/`, so
+a card never depends on what the machine has installed. A quote that cannot be
+set legibly at the smallest size fails that format and writes no `renditions`
+row at all, rather than shrinking to something unreadable; the other formats
+still render. The stage then rewrites `posts.alt_text`, because once a card
+exists the card is what a reader sees.
 
 **`lantern render --post 123 --format short`**
 Video renditions via Remotion + TTS. Separate from `compose` because it is slow,
@@ -779,6 +785,16 @@ one brand — same margin system, same two typefaces, same wordmark placement,
 adapted per aspect rather than naively letterboxed. Text must stay legible at
 phone thumbnail size: large type, high contrast, a scrim over busy photographs.
 Build the templates once, check them on an actual phone, then stop fiddling.
+
+Text is drawn as glyph outlines with opentype.js, never as an SVG `<text>`
+element. Two rules were paid for in corrupted cards and are not optional: emit
+each glyph once in font units with **every contour explicitly closed** (the
+library emits no closing command, and the rasteriser mis-fills the open subpaths
+at card scale, filling counters solid and dropping letters), and place it with a
+`transform` rather than baking the position into every coordinate. Cache the
+outlines **per font object**, never by font name: glyph indices mean different
+letters in different fonts, so a shared cache silently draws one font's letters
+for the other's.
 
 ## 11. Platforms
 

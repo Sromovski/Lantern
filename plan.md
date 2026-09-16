@@ -2805,8 +2805,10 @@ Every milestone below follows the same opening ritual:
 - Never replace the image on an `approved` post: only a `draft` or `needs_review` post is offered one.
 
 **2.6 Composition** — `src/compose/`, one template per (vertical, format)
-- Sharp + SVG text overlay for `square` (1200×1200) and `pin` (1000×1500). Shared margin system, two typefaces (bundle OFL-licensed fonts and record their licenses), consistent wordmark, scrim over busy images.
-- Tests: exact output dimensions, text never overflows its box (measure before render and fail the rendition rather than shrink to illegibility), and the `renditions` row is replaced per format on re-run.
+- Sharp + SVG text overlay for `square` (1200×1200) and `pin` (1000×1500), written as JPEG at `compose.jpeg_quality` (90). No migration: `renditions` and its `(post_id, status)` index have both existed since `001_initial.sql`.
+- Typefaces: **Lora** for the quotation, **Work Sans** for the author, the work and the wordmark (open decision #9, decided 2026-09-15). Both are variable OFL fonts committed under `assets/fonts/` with their `OFL.txt`, each well under the 500 KB blob limit. The wordmark text (`THE COMMONPLACE BOOK`) lives in `compose.wordmark` in the vertical config, so the still-open page name (#1) can change without touching code.
+- Text is laid out glyph by glyph with opentype.js, because its string APIs run feature substitution and throw on these fonts. Emit each outline **in font units with every contour closed** and place it with a `transform`: absolute coordinates plus the library's unclosed contours make the rasteriser drop and mis-fill letters at card scale. Cache outlines **per font object**, never by font name — glyph indices differ between fonts, and a shared cache renders one font's letters for the other's (it printed "Priwe anw Prejuwice" for "Pride and Prejudice").
+- Tests: exact output dimensions, a quote that cannot be set at the smallest size fails that format and writes no row, re-running replaces one format's row and leaves the others, and the same letter yields different path data in the two fonts.
 - The composed card is what a reader sees, so this stage owns `posts.alt_text`: rewrite it from the quote, the author and the chosen image (2.5 leaves the enrich text in place).
 - Check the output on a real phone, then stop fiddling (spec §10).
 
@@ -2884,7 +2886,7 @@ Every milestone below follows the same opening ritual:
 | 6 | Claude model tier for enrichment vs. fact-check | Phase 2.4 | **Decided 2026-09-15:** `claude-opus-5` writes (server-side fallback), `claude-sonnet-5` checks; Wikipedia paragraphs are the background sources; one visible revision before `needs_review` |
 | 7 | Archive hosting, and whether a minimal archive ships with Pinterest in Phase 6 instead of Phase 8 | Phase 6 | Pinterest's value is mostly the link |
 | 8 | TTS provider, or no narration at all | Phase 8 | |
-| 9 | The two typefaces and wordmark | Phase 2.6 | Must be OFL or otherwise redistributable |
+| 9 | The two typefaces and wordmark | Phase 2.6 | **Decided 2026-09-15:** Lora sets the quotation, Work Sans the author line and wordmark; both OFL, committed with their licences. Wordmark text `THE COMMONPLACE BOOK` lives in `compose.wordmark`, not in code, so open decision #1 can still change it |
 | 10 | Passage-selection strategy in 2.1 (Claude chooses, exact match verifies) | Phase 2.1 sub-plan | |
 
 ## Spec coverage check

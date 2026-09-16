@@ -3,10 +3,12 @@ import Anthropic from '@anthropic-ai/sdk';
 import { Command, CommanderError } from 'commander';
 import { config as loadDotenv } from 'dotenv';
 import { join, resolve } from 'node:path';
+import { composePost, type FormatReport } from './compose/compose.js';
+import { IMAGE_FORMAT_NAMES, isImageFormat, type ImageFormat } from './compose/formats.js';
 import { loadConfig } from './config/load.js';
 import { openDb, type Db } from './db/connection.js';
 import { migrate, pendingMigrations } from './db/migrate.js';
-import { MAX_ENRICH_FAILURES } from './db/posts.js';
+import { MAX_ENRICH_FAILURES, postToCompose } from './db/posts.js';
 import { syncConfig } from './db/sync.js';
 import { runChecks } from './doctor/checks.js';
 import { exitCode, formatReport } from './doctor/report.js';
@@ -92,6 +94,20 @@ function describeImage(item: PostImageReport): string {
   if (outcome.status === 'failed') return `${head}: failed (${outcome.reason})`;
   if (outcome.status === 'reused') return `${head}: image ${outcome.imageId} reused`;
   return `${head}: image ${outcome.imageId} from ${outcome.title} (${outcome.from}; ${outcome.refused.length} refused)`;
+}
+
+function describeCard(item: FormatReport): string {
+  const outcome = item.outcome;
+  if (outcome.status === 'failed') return `${item.format}: failed (${outcome.reason})`;
+  const size = Math.round(outcome.bytes / 1024);
+  return `${item.format}: rendition ${outcome.renditionId} at ${outcome.localPath} (${size} KB, quote ${outcome.quoteSize}px over ${outcome.lines} lines)`;
+}
+
+/** The vertical a post belongs to, since compose selects a post rather than a vertical. */
+function findVerticalById(db: Db, verticalId: number) {
+  const slug = db.prepare('SELECT slug FROM verticals WHERE id = ?').pluck().get(verticalId) as string | undefined;
+  if (slug === undefined) throw new Error(`vertical ${verticalId} is not in the database; run lantern migrate`);
+  return findVertical(db, slug);
 }
 
 program
@@ -243,6 +259,46 @@ program
     for (const item of report.items) console.log(describeImage(item));
     console.log(`images: ${report.attached} downloaded, ${report.reused} reused; failed: ${report.failed}`);
     if (report.noWikidataId > 0) console.log(`waiting on a subject Wikidata id: ${report.noWikidataId}`);
+    if (report.failed > 0) process.exitCode = 1;
+  });
+
+program
+  .command('compose')
+  .description('Render the cards for a post from its source image and its text; exits 1 if a format could not be rendered')
+  .requiredOption('--post <id>', 'the post to compose')
+  .option('--formats <list>', `comma-separated formats to render (${IMAGE_FORMAT_NAMES.join(', ')}); defaults to the vertical's compose.formats`)
+  .action(async (opts: { post: string; formats?: string }) => {
+    // Everything that can be judged from the arguments alone is judged first: a typo should not need
+    // a migrated database and an existing post before it is reported as a typo.
+    const postId = Number(opts.post);
+    if (!Number.isInteger(postId) || postId < 1) throw new Error(`--post must be a positive integer, got ${opts.post}`);
+    const named = opts.formats?.split(',').map((format) => format.trim()).filter((format) => format !== '');
+    if (named !== undefined && named.length === 0) throw new Error('--formats must name at least one format');
+    for (const format of named ?? []) {
+      if (!isImageFormat(format)) throw new Error(`unknown format: ${format}; expected ${IMAGE_FORMAT_NAMES.join(', ')}`);
+    }
+
+    const db = openMigratedDb();
+    const post = postToCompose(db, postId);
+    if (post === undefined) throw new Error(`post ${postId} does not exist`);
+    const { vertical, verticalId } = findVerticalById(db, post.verticalId);
+    const compose = vertical.compose;
+    if (compose === undefined) throw new Error(`vertical ${vertical.slug} has no compose section`);
+    const formats: readonly ImageFormat[] = named === undefined ? compose.formats : (named as ImageFormat[]);
+
+    const report = await runStage(db, { stage: 'compose', verticalId }, () =>
+      composePost({
+        db,
+        postId,
+        formats,
+        config: compose,
+        fontsDir: join(paths.root, 'assets', 'fonts'),
+        mediaDir: paths.media,
+        log,
+      }),
+    );
+    for (const item of report.items) console.log(describeCard(item));
+    console.log(`post ${report.postId}: ${report.written} rendered, ${report.failed} failed`);
     if (report.failed > 0) process.exitCode = 1;
   });
 
