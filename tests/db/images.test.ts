@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { attachImage, insertImage, postsNeedingImage, subjectImage, type NewImage } from '../../src/db/images.js';
+import { attachImage, countPostsWithoutSubjectId, insertImage, postsNeedingImage, subjectImage, type NewImage } from '../../src/db/images.js';
 import { testDb } from '../helpers/db.js';
 
 const NOW = new Date('2026-09-15T00:00:00.000Z');
@@ -97,7 +97,24 @@ describe('postsNeedingImage and attachImage', () => {
     expect(postsNeedingImage(db, verticalId, 10).map((p) => p.postId)).toEqual([second, third]);
 
     const other = insertImage(db, image(dickens, { sourceUrl: `${FILE_URL}?v=2` }), NOW);
+    expect(other).not.toBe(imageId);
+    expect(subjectImage(db, dickens)?.id).toBe(imageId);
     expect(attachImage(db, first, other)).toBe(false);
     expect(db.prepare('SELECT image_id FROM posts WHERE id = ?').pluck().get(first)).toBe(imageId);
+    expect(attachImage(db, 9999, imageId)).toBe(false);
+  });
+
+  it('offers only a draft or a post waiting for review, and counts the posts it cannot look up', () => {
+    const { db, verticalId, subject, post } = setup();
+    const dickens = subject('Charles Dickens', 'charles-dickens', 'Q5686');
+    const unlinked = subject('Anonymous', 'anonymous', null);
+    const draft = post(dickens, 'It was the best of times, it was the worst of times.');
+    const waiting = post(dickens, 'There is a wisdom of the head, and a wisdom of the heart.', 'needs_review');
+    post(dickens, 'This post was rejected in review and will never be published.', 'rejected');
+    post(dickens, 'This post was approved with exactly the picture a human saw.', 'approved');
+    post(unlinked, 'This subject has no Wikidata id, so nothing can be looked up for it.');
+
+    expect(postsNeedingImage(db, verticalId, 10).map((p) => p.postId)).toEqual([draft, waiting]);
+    expect(countPostsWithoutSubjectId(db, verticalId)).toBe(1);
   });
 });

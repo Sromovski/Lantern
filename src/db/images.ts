@@ -75,9 +75,11 @@ export interface PostNeedingImage {
 }
 
 /**
- * Posts of a vertical that have no image yet, oldest first. A post that already has one is never
- * returned, so an approved post keeps the image it was approved with (spec section 10). A subject
- * without a Wikidata id cannot be looked up and is left out.
+/**
+ * Posts of a vertical that have no image yet, oldest first. Only a draft or a post waiting for review is
+ * offered: an approved post is what a human approved, picture and all, and a rejected one will never be
+ * published (spec sections 5 and 10). A subject without a Wikidata id cannot be looked up and is left
+ * out; countPostsWithoutSubjectId reports those, so they are never a silent skip (spec section 2.6).
  */
 export function postsNeedingImage(db: Db, verticalId: number, limit: number): PostNeedingImage[] {
   return db
@@ -86,11 +88,26 @@ export function postsNeedingImage(db: Db, verticalId: number, limit: number): Po
        FROM posts p
        JOIN items i ON i.id = p.item_id
        JOIN subjects s ON s.id = i.subject_id
-       WHERE p.vertical_id = ? AND p.image_id IS NULL AND s.wikidata_id IS NOT NULL
+       WHERE p.vertical_id = ? AND p.image_id IS NULL AND p.status IN ('draft', 'needs_review') AND s.wikidata_id IS NOT NULL
        ORDER BY p.id
        LIMIT ?`,
     )
     .all(verticalId, limit) as PostNeedingImage[];
+}
+
+/** Posts that would be offered an image but for a subject with no Wikidata id, so a run can say they exist. */
+export function countPostsWithoutSubjectId(db: Db, verticalId: number): number {
+  return db
+    .prepare(
+      `SELECT COUNT(*)
+       FROM posts p
+       JOIN items i ON i.id = p.item_id
+       LEFT JOIN subjects s ON s.id = i.subject_id
+       WHERE p.vertical_id = ? AND p.image_id IS NULL AND p.status IN ('draft', 'needs_review')
+         AND (s.id IS NULL OR s.wikidata_id IS NULL)`,
+    )
+    .pluck()
+    .get(verticalId) as number;
 }
 
 /** Links an image to a post that has none. Returns false when the post already has one: an image is never replaced. */

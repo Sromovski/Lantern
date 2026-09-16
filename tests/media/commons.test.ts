@@ -15,6 +15,7 @@ import {
   imageInfoUrl,
   imageRefusal,
   mappedLicense,
+  MAX_IMAGE_BYTES,
   MIN_SHORT_EDGE,
   portraitTitles,
 } from '../../src/media/commons.js';
@@ -124,9 +125,13 @@ describe('request urls and licence mapping', () => {
 });
 
 describe('imageRefusal', () => {
-  it('accepts a large public-domain portrait', () => {
+  it('accepts a large public-domain portrait, and both limits exactly at the boundary', () => {
     expect(imageRefusal(info('File:Good.jpg', { width: 2000, height: 3000 }), 'File:Good.jpg')).toBeNull();
     expect(MIN_SHORT_EDGE).toBe(1500);
+    expect(MAX_IMAGE_BYTES).toBe(67_108_864);
+    expect(imageRefusal(info('File:Edge.jpg', { width: MIN_SHORT_EDGE, height: MIN_SHORT_EDGE + 1, size: MAX_IMAGE_BYTES }), 'File:Edge.jpg')).toBeNull();
+    expect(imageRefusal(info('File:Under.jpg', { width: MIN_SHORT_EDGE - 1, height: 3000 }), 'File:Under.jpg')).toContain('the short edge must be');
+    expect(imageRefusal(info('File:Over.jpg', { size: MAX_IMAGE_BYTES + 1 }), 'File:Over.jpg')).toContain('must be at most');
   });
 
   it.each([
@@ -140,6 +145,13 @@ describe('imageRefusal', () => {
   ])('refuses %s', (_label, options: FileOptions, expected) => {
     expect(imageRefusal(info('File:X.jpg', options), 'File:X.jpg')).toContain(expected);
   });
+
+  it('refuses a file served from, or described on, another host', () => {
+    const elsewhere = { ...info('File:X.jpg'), url: 'https://example.invalid/x.jpg?utm_source=commons.wikimedia.org' };
+    expect(imageRefusal(elsewhere, 'File:X.jpg')).toBe('File:X.jpg is served from example.invalid, not upload.wikimedia.org');
+    const described = { ...info('File:X.jpg'), descriptionurl: 'https://example.invalid/wiki/File:X.jpg' };
+    expect(imageRefusal(described, 'File:X.jpg')).toBe('File:X.jpg is described on example.invalid, not commons.wikimedia.org');
+  });
 });
 
 describe('portraitTitles', () => {
@@ -151,9 +163,15 @@ describe('portraitTitles', () => {
         { file: 'Old.jpg', rank: 'deprecated' },
       ]),
       [pathOf(claimsUrl(E, 'Q1'))]: entity('Q1', []),
+      // A statement that says the value is unknown carries no datavalue at all.
+      [pathOf(claimsUrl(E, 'Q2'))]: {
+        entities: { Q2: { type: 'item', id: 'Q2', claims: { P18: [{ mainsnak: { snaktype: 'somevalue' }, type: 'statement', rank: 'normal' }] } } },
+        success: 1,
+      },
     });
     expect(await portraitTitles(get, E, 'Q5686')).toEqual(['File:Bust.jpg', 'File:Small.jpg']);
     expect(await portraitTitles(get, E, 'Q1')).toEqual([]);
+    expect(await portraitTitles(get, E, 'Q2')).toEqual([]);
     await expect(portraitTitles(get, E, 'Q5686|Q1')).rejects.toThrow(ImageLookupError);
   });
 });
@@ -178,6 +196,7 @@ describe('bestPortrait', () => {
       bytes: 3_875_170,
       width: 2000,
       height: 3000,
+      sha1: 'f6198b4d72ea8e71ac08b93279ae9d5f7342d919',
       license: 'public-domain',
       attribution: 'Jeremiah Gurney',
     });
@@ -204,6 +223,27 @@ describe('bestPortrait', () => {
       'File:Statue.jpg is licensed cc-by-sa-4.0, not public domain or CC0',
       'File:Claimed.jpg carries a third-party rights claim on the reproduction',
     ]);
+  });
+
+  it('matches a P18 file under the title Commons answered with, and reports an API error sent as 200', async () => {
+    const asked = ['File:dickens_gurney_head.jpg'];
+    const { get } = await wiki({
+      [pathOf(claimsUrl(E, 'Q5686'))]: entity('Q5686', [{ file: 'dickens_gurney_head.jpg' }]),
+      [pathOf(imageInfoUrl(E, asked))]: {
+        batchcomplete: true,
+        query: {
+          normalized: [{ fromencoded: false, from: 'File:dickens_gurney_head.jpg', to: 'File:Dickens gurney head.jpg' }],
+          pages: [file('File:Dickens gurney head.jpg', { width: 2000, height: 3000 })],
+        },
+      },
+      [pathOf(claimsUrl(E, 'Q1234'))]: entity('Q1234', [{ file: 'Broken.jpg' }]),
+      [pathOf(imageInfoUrl(E, ['File:Broken.jpg']))]: { error: { code: 'internal_api_error', info: 'the wiki is unwell' } },
+    });
+    const choice = await bestPortrait(get, E, 'Q5686');
+    expect(choice.from).toBe('wikidata');
+    expect(choice.image.title).toBe('File:Dickens gurney head.jpg');
+    expect(choice.refused).toEqual([]);
+    await expect(bestPortrait(get, E, 'Q1234')).rejects.toThrow('internal_api_error');
   });
 
   it('refuses when nothing passes, when a P18 file is not on Commons, and reports a non-200', async () => {

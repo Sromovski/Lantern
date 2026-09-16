@@ -91,7 +91,7 @@ function describeImage(item: PostImageReport): string {
   const outcome = item.outcome;
   if (outcome.status === 'failed') return `${head}: failed (${outcome.reason})`;
   if (outcome.status === 'reused') return `${head}: image ${outcome.imageId} reused`;
-  return `${head}: image ${outcome.imageId} from ${outcome.title} (${outcome.from}; ${outcome.refused} refused)`;
+  return `${head}: image ${outcome.imageId} from ${outcome.title} (${outcome.from}; ${outcome.refused.length} refused)`;
 }
 
 program
@@ -242,6 +242,7 @@ program
     );
     for (const item of report.items) console.log(describeImage(item));
     console.log(`images: ${report.attached} downloaded, ${report.reused} reused; failed: ${report.failed}`);
+    if (report.noWikidataId > 0) console.log(`waiting on a subject Wikidata id: ${report.noWikidataId}`);
     if (report.failed > 0) process.exitCode = 1;
   });
 

@@ -556,15 +556,20 @@ Give each post without an image a source image (§10). For an author, the
 portrait comes from their Wikidata `P18`, and when none of those images may be
 published, from the files Commons records as depicting them (`P180`), largest
 first. Only a public-domain or CC0 still image, at least 1500 px on its short
-edge, taller than it is wide and at most 64 MB, can win; anything carrying a
-rights claim on the reproduction is skipped. The original is streamed under
+edge, taller than it is wide and at most 64 MiB, can win; the file must be
+served from `upload.wikimedia.org`, and anything carrying a rights claim on the
+reproduction is skipped. The original is streamed under
 `data/media/source/` (never into the response cache) and is refused unless its
-size matches what Commons reported. The `images` row keeps the file url, the
+size and sha1 match what Commons reported, and unless it was still being served
+from `upload.wikimedia.org` after any redirect. The `images` row keeps the file url, the
 file page, the licence, the credit, the dimensions and the sha256, and one
 portrait serves every post about that author. A post whose image cannot be found
 or downloaded keeps none, is reported, and is tried again on the next run; the
-command then exits 1. An image is never replaced, so an approved post keeps the
-image it was approved with.
+command then exits 1. `--refresh` ignores cached Wikidata and Commons responses.
+Only a draft or a post waiting for review is offered an image, so an approved
+post keeps exactly what was approved and a rejected one is left alone; a post
+whose subject has no Wikidata id cannot be looked up and is counted in the run's
+summary rather than passed over in silence.
 
 **`lantern compose --post 123 --formats square,pin`**
 Render image renditions with Sharp from the post's source image + text. One
@@ -756,14 +761,14 @@ licence obligation. Never infer "it's old so it's fine" — re-photographs and
 restorations can carry their own claims, so a file whose metadata mentions a
 copyright claim, personality rights or a trademark is skipped even when it is
 tagged public domain, and so is one with a Commons `Restrictions` value. Store
-`license` and `attribution`, and render attribution in the caption when the
-license asks for it.
+`license` and `attribution`: with only public domain and CC0 in the whitelist no
+caption owes a licence line, but the credit belongs on the archive page.
 
 **Resolution matters more now.** A source image has to survive being cropped to
 both 1:1 and 9:16. Reject sources below ~1500px on the short edge, and store
 enough of the original that a re-crop never needs a re-download. Reject the
 other extreme too: Commons keeps archival scans of hundreds of megabytes, so
-anything past 64 MB is skipped for the next usable candidate.
+anything past 64 MiB is skipped for the next usable candidate.
 
 **AI fallback** fires only when PD search returns nothing usable, and only for
 non-portrait subjects. Prompt built from the item's body and the vertical's

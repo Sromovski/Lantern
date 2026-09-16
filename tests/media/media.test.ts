@@ -1,11 +1,14 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createHttpGet } from '../../src/harvest/sources.js';
 import { DownloadStatusError } from '../../src/lib/download.js';
+import { HttpError } from '../../src/lib/http.js';
 import { claimsUrl, DEFAULT_MEDIA_ENDPOINTS, DEPICTS_LIMIT, depictsSearchUrl, imageInfoUrl } from '../../src/media/commons.js';
 import { imagePath, mediaVertical, type DownloadFn } from '../../src/media/media.js';
 import { testDb } from '../helpers/db.js';
@@ -14,6 +17,12 @@ const UA = 'Lantern/test (test@example.invalid)';
 const E = DEFAULT_MEDIA_ENDPOINTS;
 const NOW = () => new Date('2026-09-15T00:00:00.000Z');
 const BYTES = 3_875_170;
+/** The bytes every fake download writes, and the sha1 Commons would report for them. */
+const PORTRAIT = Buffer.from('a small stand-in for a portrait');
+const PORTRAIT_SHA1 = createHash('sha1').update(PORTRAIT).digest('hex');
+const hash8 = (url: string) => createHash('sha256').update(url).digest('hex').slice(0, 8);
+const PORTRAIT_URL = 'https://upload.wikimedia.org/wikipedia/commons/a/aa/Portrait.jpg';
+const PORTRAIT_PATH = 'source/charles-dickens-portrait-' + hash8(PORTRAIT_URL) + '.jpg';
 const servers: Server[] = [];
 let cacheDir: string;
 let mediaDir: string;
@@ -63,7 +72,7 @@ const file = (title: string, width: number, height: number, license = 'pd') => (
       height,
       url: `https://upload.wikimedia.org/wikipedia/commons/a/aa/${title.slice(5).replace(/ /g, '_')}?utm_source=commons.wikimedia.org`,
       descriptionurl: `https://commons.wikimedia.org/wiki/${title.replace(/ /g, '_')}`,
-      sha1: 'f6198b4d72ea8e71ac08b93279ae9d5f7342d919',
+      sha1: PORTRAIT_SHA1,
       mime: 'image/jpeg',
       extmetadata: { License: { value: license, source: 'commons-templates' }, Artist: meta('Popular Graphic Arts'), Restrictions: meta('') },
     },
@@ -81,7 +90,9 @@ function downloader(bytes = BYTES) {
   const calls: { url: string; destPath: string }[] = [];
   const fn: DownloadFn = async (url, destPath) => {
     calls.push({ url, destPath });
-    return { bytes, sha256: 'b'.repeat(64) };
+    mkdirSync(dirname(destPath), { recursive: true });
+    writeFileSync(destPath, PORTRAIT);
+    return { bytes, sha256: 'b'.repeat(64), finalUrl: url };
   };
   return { fn, calls };
 }
@@ -118,12 +129,24 @@ function setup() {
   return { db, verticalId, subject, post };
 }
 
+const named = (title: string, mime: string, fileUrl: string) => ({ title, mime, fileUrl }) as never;
+
 describe('imagePath', () => {
-  it('names the original after the subject and the Commons title', () => {
-    expect(imagePath('charles-dickens', { title: 'File:Charles Dickens LCCN2003653043.jpg', mime: 'image/jpeg' } as never)).toBe(
-      'source/charles-dickens-charles-dickens-lccn2003653043.jpg',
+  it('names the original after the subject, the Commons title and a hash of the file url', () => {
+    const dickens = 'https://upload.wikimedia.org/x/Charles_Dickens.jpg';
+    expect(imagePath('charles-dickens', named('File:Charles Dickens LCCN2003653043.jpg', 'image/jpeg', dickens))).toBe(
+      'source/charles-dickens-charles-dickens-lccn2003653043-' + hash8(dickens) + '.jpg',
     );
-    expect(imagePath('jane-austen', { title: 'File:Memoir scan.png', mime: 'image/png' } as never)).toBe('source/jane-austen-memoir-scan.png');
+    const austen = 'https://upload.wikimedia.org/x/Memoir_scan.png';
+    expect(imagePath('jane-austen', named('File:Memoir scan.png', 'image/png', austen))).toBe(
+      'source/jane-austen-memoir-scan-' + hash8(austen) + '.png',
+    );
+
+    // Two titles that trim to the same name still get their own file.
+    const long = 'x'.repeat(70);
+    const first = named('File:' + long + ' one.jpg', 'image/jpeg', 'https://upload.wikimedia.org/x/one.jpg');
+    const second = named('File:' + long + ' two.jpg', 'image/jpeg', 'https://upload.wikimedia.org/x/two.jpg');
+    expect(imagePath('charles-dickens', first)).not.toBe(imagePath('charles-dickens', second));
   });
 });
 
@@ -141,17 +164,16 @@ describe('mediaVertical', () => {
       attached: 1,
       reused: 0,
       failed: 0,
-      items: [{ postId, author: 'Charles Dickens', outcome: { status: 'attached', imageId: expect.any(Number), title: 'File:Portrait.jpg', from: 'wikidata', refused: 0 } }],
+      noWikidataId: 0,
+      items: [{ postId, author: 'Charles Dickens', outcome: { status: 'attached', imageId: expect.any(Number), title: 'File:Portrait.jpg', from: 'wikidata', refused: [] } }],
     });
-    expect(download.calls).toEqual([
-      { url: 'https://upload.wikimedia.org/wikipedia/commons/a/aa/Portrait.jpg', destPath: join(mediaDir, 'source', 'charles-dickens-portrait.jpg') },
-    ]);
+    expect(download.calls).toEqual([{ url: PORTRAIT_URL, destPath: join(mediaDir, PORTRAIT_PATH) }]);
     expect(db.prepare('SELECT source_url, file_page_url, license, attribution, local_path, width, height, mime, bytes, sha256 FROM images').get()).toEqual({
-      source_url: 'https://upload.wikimedia.org/wikipedia/commons/a/aa/Portrait.jpg',
+      source_url: PORTRAIT_URL,
       file_page_url: 'https://commons.wikimedia.org/wiki/File:Portrait.jpg',
       license: 'public-domain',
       attribution: 'Popular Graphic Arts',
-      local_path: 'source/charles-dickens-portrait.jpg',
+      local_path: PORTRAIT_PATH,
       width: 2000,
       height: 3000,
       mime: 'image/jpeg',
@@ -217,6 +239,60 @@ describe('mediaVertical', () => {
     const failed = await mediaVertical({ db, verticalId, get, endpoints: E, download: failing, mediaDir, limit: 10, now: NOW });
     expect(failed).toMatchObject({ failed: 1 });
     expect(failed.items[0]!.outcome.status === 'failed' && failed.items[0]!.outcome.reason).toContain('download failed with HTTP 503');
+  });
+
+  it('fails one post when the network never answers, or when a lookup does not return 200', async () => {
+    const { db, verticalId, subject, post } = setup();
+    const dickens = subject('Charles Dickens', 'charles-dickens', 'Q5686');
+    post(dickens, 'It was the best of times, it was the worst of times.');
+    const { get } = await wiki(DICKENS_ROUTES);
+
+    const unreachable: DownloadFn = async (url) => {
+      throw new HttpError('fetch failed', url, 4);
+    };
+    const blip = await mediaVertical({ db, verticalId, get, endpoints: E, download: unreachable, mediaDir, limit: 10, now: NOW });
+    expect(blip).toMatchObject({ considered: 1, attached: 0, failed: 1 });
+    expect(blip.items[0]!.outcome.status === 'failed' && blip.items[0]!.outcome.reason).toBe('fetch failed');
+
+    // Nothing is routed for Austen, so the claims lookup answers 404.
+    const austen = subject('Jane Austen', 'jane-austen', 'Q36322');
+    post(austen, 'It is a truth universally acknowledged, that a single man in possession of a good fortune.');
+    const missing = await mediaVertical({ db, verticalId, get, endpoints: E, download: downloader().fn, mediaDir, limit: 10, now: NOW });
+    expect(missing).toMatchObject({ considered: 2, attached: 1, failed: 1 });
+    expect(missing.items[1]!.outcome.status === 'failed' && missing.items[1]!.outcome.reason).toContain('HTTP 404');
+  });
+
+  it('leaves no file behind when the download does not match the size, the host or the sha1 Commons reported', async () => {
+    const { db, verticalId, subject, post } = setup();
+    const dickens = subject('Charles Dickens', 'charles-dickens', 'Q5686');
+    post(dickens, 'It was the best of times, it was the worst of times.');
+    const { get } = await wiki(DICKENS_ROUTES);
+    const dest = join(mediaDir, PORTRAIT_PATH);
+    const writing =
+      (bytes: number, contents: Buffer, finalUrl = PORTRAIT_URL): DownloadFn =>
+      async (_url, destPath) => {
+        mkdirSync(dirname(destPath), { recursive: true });
+        writeFileSync(destPath, contents);
+        return { bytes, sha256: 'c'.repeat(64), finalUrl };
+      };
+    const run = (download: DownloadFn) => mediaVertical({ db, verticalId, get, endpoints: E, download, mediaDir, limit: 10, now: NOW });
+    const reasonOf = (report: Awaited<ReturnType<typeof run>>) =>
+      report.items[0]!.outcome.status === 'failed' ? report.items[0]!.outcome.reason : 'attached';
+
+    const short = await run(writing(BYTES - 1, PORTRAIT));
+    expect(short).toMatchObject({ failed: 1 });
+    expect(reasonOf(short)).toBe('File:Portrait.jpg downloaded as ' + (BYTES - 1) + ' bytes, but Commons reported ' + BYTES);
+    expect(existsSync(dest)).toBe(false);
+
+    const elsewhere = await run(writing(BYTES, PORTRAIT, 'https://example.invalid/Portrait.jpg'));
+    expect(reasonOf(elsewhere)).toBe('File:Portrait.jpg was served from example.invalid, not upload.wikimedia.org');
+    expect(existsSync(dest)).toBe(false);
+
+    const tampered = Buffer.from('bytes that are not the ones Commons served');
+    const wrongBytes = await run(writing(BYTES, tampered));
+    expect(reasonOf(wrongBytes)).toContain('but Commons reported ' + PORTRAIT_SHA1);
+    expect(existsSync(dest)).toBe(false);
+    expect(db.prepare('SELECT COUNT(*) FROM images').pluck().get()).toBe(0);
   });
 
   it('stops the run on any other error', async () => {

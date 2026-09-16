@@ -2746,6 +2746,7 @@ named below, not later.
 | **Unsafe-method retries and upload timeouts** (hardening final review I3). | `fetchWithRetry` retries any method after a network error, timeout or 5xx; with the per-attempt timeout, a slow POST the server already processed is sent again (probe: 4 processed POSTs). A Facebook `POST /{page-id}/photos` could create duplicate Page posts, which `UNIQUE(post_id, channel_id)` cannot prevent remotely. The whole-attempt timeout will also abort long uploads (`videos.insert`). Do not retry non-GET/HEAD requests after the request was sent without an explicit opt-in and idempotency key; add separate connect/idle timeouts for uploads. | **Phase 4** |
 | **Numbers the numeric check cannot see** (hardening final review I4). | Wrong numbers still pass as supported: numbers as words (`nine planets` vs `eight planets`), unit swaps (`93 million kilometers` vs `miles`, Celsius vs Fahrenheit), ordinals (`4th` vs `4`), sign words (`minus 427`, `below zero`), unlisted scales (`hundred`, `sextillion`), fractions (vulgar fractions, `3/4` vs `4/3`). Attach a following unit, keep ordinal suffixes, treat minus/negative/below zero as a sign, extend scale words, map vulgar fractions, and flag spelled-out cardinals absent from the excerpts. | **Phase 7** |
 | **Ambiguous publish outcomes** (prerequisites final review I1). | The HTTP client no longer re-sends a POST that timed out or got a 5xx after it was sent, but a stage-level retry on the next `lantern publish` run would, and `UNIQUE(post_id, channel_id)` cannot stop a duplicate on the platform. `publish/` must also never use `cachedFetch`: a cached POST 200 is replayed without sending, and the key ignores the Authorization header. Mark an ambiguous outcome `failed` for review, or check the platform for the post before any re-send. | **Phase 4** |
+| **A network failure stops an enrich run** (media final review, P3). | `enrichVertical` catches `WikiLookupError`, `SourceStatusError` and `EnrichResponseError`, but not `HttpError`, which is what `fetchWithRetry` throws when every attempt fails without a response. One connection failure while reading Wikipedia aborts the whole run instead of failing that quote, which `lantern media` now handles correctly. Add `HttpError` to the per-quote catch, with a test. | **Phase 5** |
 
 Every milestone below follows the same opening ritual:
 
@@ -2797,15 +2798,16 @@ Every milestone below follows the same opening ritual:
 - Gate: any unsupported claim **or** a non-empty `unsupportedNumbers(hook + body + closer, sourceExcerpts)` → `needs_review` with the reasons stored. This applies to every vertical, not just science, because dates in literature posts are numbers too.
 - Model tier: `claude-opus-5` writes and `claude-sonnet-5` checks (open decision #6, decided 2026-09-15).
 
-**2.5 Wikimedia image lookup** — `src/media/wikimedia.ts`
+**2.5 Wikimedia image lookup** — `src/media/commons.ts`, `src/media/media.ts`
 - Wikidata `P18` → Commons `imageinfo` + `extmetadata`. Map the license to the whitelist (`public-domain` | `cc0`, user decision 2026-09-15); anything else is rejected. Store attribution.
-- Reject a short edge under 1500 px. Keep the original under `data/media/source/`.
-- Fallback order for authors without a usable portrait: title page, manuscript page, period image of the setting. **Never generated.** Make `generateImage` refuse structurally when `subject.kind === 'author'` and give that refusal its own test.
-- Never replace the image on an `approved` post.
+- Reject a short edge under 1500 px, a landscape image, anything past 64 MiB, and any file whose metadata claims rights in the reproduction. Keep the original under `data/media/source/`, and refuse it unless its size, sha1 and host match what Commons served.
+- Fallback for an author whose `P18` images cannot be published: the files Commons records as *depicting* them (`P180`), largest first (user decision 2026-09-15, after probes found no reliable route to title pages). **Never generated** for a person (spec §9); no `generateImage` exists yet, and the science vertical will bring it.
+- Never replace the image on an `approved` post: only a `draft` or `needs_review` post is offered one.
 
 **2.6 Composition** — `src/compose/`, one template per (vertical, format)
 - Sharp + SVG text overlay for `square` (1200×1200) and `pin` (1000×1500). Shared margin system, two typefaces (bundle OFL-licensed fonts and record their licenses), consistent wordmark, scrim over busy images.
 - Tests: exact output dimensions, text never overflows its box (measure before render and fail the rendition rather than shrink to illegibility), and the `renditions` row is replaced per format on re-run.
+- The composed card is what a reader sees, so this stage owns `posts.alt_text`: rewrite it from the quote, the author and the chosen image (2.5 leaves the enrich text in place).
 - Check the output on a real phone, then stop fiddling (spec §10).
 
 **2.7 Captions** — `src/caption/facebook.ts`, `src/caption/pinterest.ts`

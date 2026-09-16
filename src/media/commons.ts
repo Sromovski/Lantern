@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { SourceStatusError, type HttpGet } from '../harvest/sources.js';
 import type { HttpResult } from '../lib/http.js';
+import { hostOf } from '../verify/source-policy.js';
 
 export interface MediaEndpoints {
   wikidata: string;
@@ -30,6 +31,10 @@ export const STILL_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/tiff'] as co
  */
 export const MAX_IMAGE_BYTES = 64 * 1024 ** 2;
 
+/** Commons serves its files from one host, and describes them on another. Anything else is not the file Commons licensed. */
+export const FILE_HOST = 'upload.wikimedia.org';
+export const FILE_PAGE_HOST = 'commons.wikimedia.org';
+
 /** Wording that means someone claims rights in this reproduction, whatever the licence tag says (spec section 10). */
 const CLAIMED = /copyright claim|copyright is claimed|personality rights|trademark/i;
 
@@ -53,7 +58,11 @@ const imageInfoSchema = z.object({
   extmetadata: metadataSchema.optional(),
 });
 const pagesSchema = z.object({
-  query: z.object({ pages: z.array(z.object({ title: z.string(), missing: z.literal(true).optional(), imageinfo: z.array(imageInfoSchema).optional() })) }),
+  query: z.object({
+    // MediaWiki answers under its own spelling of a title (underscores folded, first letter capitalised) and reports the mapping here.
+    normalized: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
+    pages: z.array(z.object({ title: z.string(), missing: z.literal(true).optional(), imageinfo: z.array(imageInfoSchema).optional() })),
+  }),
 });
 const entitiesSchema = z.object({
   entities: z.record(z.string(), z.object({ id: z.string(), claims: z.record(z.string(), z.array(z.unknown())).optional() })),
@@ -123,6 +132,8 @@ export interface CommonsImage {
   filePageUrl: string;
   mime: string;
   bytes: number;
+  /** Commons' own sha1 of the file, so a download can be proved to be the file Commons served. */
+  sha1: string;
   width: number;
   height: number;
   license: ImageLicense;
@@ -130,12 +141,17 @@ export interface CommonsImage {
   attribution: string | null;
 }
 
-/** extmetadata values are HTML; this is the plain text, with runs of whitespace collapsed. */
+const ENTITIES: Record<string, string> = { nbsp: ' ', amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' };
+
+/** extmetadata values are HTML; this is the plain text, with entities decoded and runs of whitespace collapsed. */
 function plainText(value: unknown): string {
   return String(value ?? '')
     .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
+    .replace(/&(?:#(\d{1,6})|#[xX]([0-9a-fA-F]{1,5})|([a-zA-Z]+));/g, (whole, decimal: string | undefined, hex: string | undefined, name: string | undefined) => {
+      if (decimal !== undefined) return String.fromCodePoint(Number(decimal));
+      if (hex !== undefined) return String.fromCodePoint(Number.parseInt(hex, 16));
+      return (name !== undefined ? ENTITIES[name] : undefined) ?? whole;
+    })
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -155,6 +171,10 @@ export function imageRefusal(info: z.infer<typeof imageInfoSchema>, title: strin
   if (short < MIN_SHORT_EDGE) return `${title} is ${info.width}x${info.height}; the short edge must be at least ${MIN_SHORT_EDGE} px`;
   if (info.height <= info.width) return `${title} is ${info.width}x${info.height}; a portrait must be taller than it is wide`;
   if (info.size > MAX_IMAGE_BYTES) return `${title} is ${info.size} bytes; the file must be at most ${MAX_IMAGE_BYTES} bytes`;
+  const fileHost = hostOf(info.url.split('?')[0] ?? info.url);
+  if (fileHost !== FILE_HOST) return `${title} is served from ${fileHost ?? 'an unreadable url'}, not ${FILE_HOST}`;
+  const pageHost = hostOf(info.descriptionurl);
+  if (pageHost !== FILE_PAGE_HOST) return `${title} is described on ${pageHost ?? 'an unreadable url'}, not ${FILE_PAGE_HOST}`;
   const restrictions = field(metadata, 'Restrictions');
   if (restrictions !== '') return `${title} carries the Commons restriction ${restrictions}`;
   const text = Object.values(metadata ?? {})
@@ -173,6 +193,7 @@ function toImage(title: string, info: z.infer<typeof imageInfoSchema>): CommonsI
     filePageUrl: info.descriptionurl,
     mime: info.mime,
     bytes: info.size,
+    sha1: info.sha1,
     width: info.width,
     height: info.height,
     license: mappedLicense(field(metadata, 'License'))!,
@@ -185,12 +206,19 @@ export interface ImageCandidate {
   info: z.infer<typeof imageInfoSchema>;
 }
 
-async function candidates(get: HttpGet, url: string): Promise<ImageCandidate[]> {
+interface LookupPages {
+  candidates: ImageCandidate[];
+  /** The title asked for, mapped to the spelling MediaWiki answered under. */
+  normalized: Map<string, string>;
+}
+
+async function lookupPages(get: HttpGet, url: string): Promise<LookupPages> {
   const { query } = await getJson(get, url, 'commons', pagesSchema);
-  return query.pages.flatMap((page) => {
+  const candidates = query.pages.flatMap((page) => {
     const info = page.imageinfo?.[0];
     return page.missing === true || info === undefined ? [] : [{ title: page.title, info }];
   });
+  return { candidates, normalized: new Map((query.normalized ?? []).map((entry) => [entry.from, entry.to])) };
 }
 
 export interface PortraitChoice {
@@ -213,21 +241,23 @@ export async function bestPortrait(get: HttpGet, endpoints: MediaEndpoints, qid:
   const refused: string[] = [];
   const titles = await portraitTitles(get, endpoints, qid);
   if (titles.length > 0) {
-    const named = await candidates(get, imageInfoUrl(endpoints, titles));
-    // Commons answers in its own order, so the P18 order is restored here.
+    const { candidates: named, normalized } = await lookupPages(get, imageInfoUrl(endpoints, titles));
+    // Commons answers in its own order and under its own spelling of each title, so the P18 order is restored here.
     for (const title of titles) {
-      const candidate = named.find((entry) => entry.title === title);
+      const answeredAs = normalized.get(title) ?? title;
+      const candidate = named.find((entry) => entry.title === answeredAs);
       if (candidate === undefined) {
         refused.push(`${title} is not on Commons`);
         continue;
       }
-      const refusal = imageRefusal(candidate.info, title);
-      if (refusal === null) return { image: toImage(title, candidate.info), refused, from: 'wikidata' };
+      // Commons' own spelling is what names the file everywhere else, so that is what a chosen image carries.
+      const refusal = imageRefusal(candidate.info, answeredAs);
+      if (refusal === null) return { image: toImage(answeredAs, candidate.info), refused, from: 'wikidata' };
       refused.push(refusal);
     }
   }
 
-  const depicted = await candidates(get, depictsSearchUrl(endpoints, qid, DEPICTS_LIMIT));
+  const { candidates: depicted } = await lookupPages(get, depictsSearchUrl(endpoints, qid, DEPICTS_LIMIT));
   const usable: CommonsImage[] = [];
   for (const candidate of depicted) {
     const refusal = imageRefusal(candidate.info, candidate.title);
