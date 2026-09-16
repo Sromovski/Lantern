@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { fitText, glyphOutline, loadFont, measure, trackedWidth, wrapText } from '../../src/compose/text.js';
+import { fitText, glyphOutline, loadFont, measure, textPaths, trackedWidth, wrapText } from '../../src/compose/text.js';
 
 const FONTS = fileURLToPath(new URL('../../assets/fonts/', import.meta.url));
 const lora = loadFont(`${FONTS}Lora.ttf`);
@@ -25,6 +25,28 @@ describe('glyphOutline', () => {
     expect(second).toBe(first);
     // Font units, not card coordinates: a 1000-unit em never produces four-digit card positions here.
     expect(first.startsWith('M')).toBe(true);
+  });
+
+  it('places glyphs with a transform, keeping the outline in font units wherever it lands', () => {
+    // A regression to getPath(x, y, size) would bake the position into every coordinate. That is the
+    // failure that dropped and mis-filled letters at card scale, and it changes neither the image
+    // dimensions nor any database row, so nothing else in the suite would notice it.
+    const dataOf = (svg: string) => {
+      const start = svg.indexOf('d="') + 3;
+      return svg.slice(start, svg.indexOf('"', start));
+    };
+    const near = textPaths(lora, 'e', 0, 0, 48, '#f6f3ec');
+    const far = textPaths(lora, 'e', 900, 1100, 48, '#f6f3ec');
+
+    // The same letter carries byte-identical data wherever it is placed; only the transform differs.
+    expect(dataOf(far)).toBe(dataOf(near));
+    expect(dataOf(far)).toBe(glyphOutline(lora, lora.charToGlyph('e')));
+    expect(far).toContain('transform="translate(900.00 1100.00) scale(');
+
+    // No part of the card-scale position leaks into the path: every coordinate stays near the em square.
+    const magnitudes = (dataOf(far).match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number).map(Math.abs);
+    expect(magnitudes.length).toBeGreaterThan(0);
+    expect(Math.max(...magnitudes)).toBeLessThan(lora.unitsPerEm * 3);
   });
 
   it('gives each font its own outlines', () => {
