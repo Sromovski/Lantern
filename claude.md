@@ -589,9 +589,25 @@ perfectly good square image. Phase 8.
 
 **`lantern caption --post 123 --platforms facebook,pinterest`**
 Generate per-platform text from the post. Enforces each platform's limits and
-conventions (§11). Writes `captions` rows. This is a formatting step over
-already-verified content — it may not introduce new claims, and the fact-check
-gate re-runs against any caption that isn't a pure truncation.
+conventions (§11). Writes `captions` rows, one per platform; re-running replaces
+that platform's row only. This is a formatting step over already-verified
+content — it may not introduce new claims, and the fact-check gate re-runs
+against any caption that isn't a pure truncation.
+
+No model ever writes a caption. The stage selects and trims the post's own
+approved prose, which is what keeps it a formatter (§15), so the only model call
+is the checker. A caption skips even that when every one of its sentences is a
+literal substring of the approved text: trimming to a platform's limit drops
+whole sentences and never appends an ellipsis, so a shortened caption stays
+verbatim and costs nothing. Anything else is checked against the post's cited
+sources, because a caption that stitches two approved clauses together can
+imply something neither of them said. A caption with any problem writes no row:
+the review queue never shows text that was not judged (§2.6).
+
+Facebook takes the write-up itself. Pinterest takes a title derived from the
+approved hook, cut at a word boundary, and a description from the body and
+closer. Neither carries hashtags (§11), and Pinterest's `link` stays empty until
+the archive site exists (§13).
 
 **`lantern queue --channel literature-facebook`**
 Select posts whose required renditions and captions are `ready`, and create

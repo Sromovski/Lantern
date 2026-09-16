@@ -230,6 +230,37 @@ describe('lantern CLI', () => {
     expect(existsSync(media)).toBe(false);
   }, 60_000);
 
+  it('caption refuses a bad post id, an unknown platform, pending migrations and a post that does not exist, without needing an API key', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    const noKey = { ANTHROPIC_API_KEY: '' };
+
+    const badPost = lantern(['caption', '--post', '0'], scratch, { env: noKey });
+    expect(badPost.code).toBe(1);
+    expect(badPost.out).toContain('--post must be a positive integer, got 0');
+
+    // The platform list is judged before the database is opened, so a typo costs nothing.
+    const unknown = lantern(['caption', '--post', '1', '--platforms', 'facebook,myspace'], scratch, { env: noKey });
+    expect(unknown.code).toBe(1);
+    expect(unknown.out).toContain('unknown platform: myspace; expected facebook, pinterest');
+
+    const empty = lantern(['caption', '--post', '1', '--platforms', ' , '], scratch, { env: noKey });
+    expect(empty.code).toBe(1);
+    expect(empty.out).toContain('--platforms must name at least one platform');
+
+    const pending = lantern(['caption', '--post', '1'], scratch, { env: noKey });
+    expect(pending.code).toBe(1);
+    expect(pending.out).toContain('run lantern migrate');
+
+    expect(lantern(['migrate'], scratch).code).toBe(0);
+
+    const missing = lantern(['caption', '--post', '1'], scratch, { env: noKey });
+    expect(missing.code).toBe(1);
+    expect(missing.out).toContain('post 1 does not exist');
+    // The key is never demanded up front: a caption built from approved text is verbatim and needs
+    // no fact check, so requiring a key would refuse a command that never calls Anthropic.
+    expect(missing.out).not.toContain('ANTHROPIC_API_KEY is not set');
+  }, 60_000);
+
   it('compose refuses a bad post id, an unknown format, pending migrations and a post that does not exist', () => {
     const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
     const badPost = lantern(['compose', '--post', '0'], scratch);

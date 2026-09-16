@@ -3,6 +3,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { Command, CommanderError } from 'commander';
 import { config as loadDotenv } from 'dotenv';
 import { join, resolve } from 'node:path';
+import { captionPost, CAPTION_PLATFORMS, isCaptionPlatform, type CaptionPlatform, type PlatformReport } from './caption/caption.js';
+import type { CaptionLimits } from './caption/facebook.js';
 import { composePost, type FormatReport } from './compose/compose.js';
 import { IMAGE_FORMAT_NAMES, isImageFormat, type ImageFormat } from './compose/formats.js';
 import { loadConfig } from './config/load.js';
@@ -12,7 +14,7 @@ import { MAX_ENRICH_FAILURES } from './db/posts.js';
 import { syncConfig } from './db/sync.js';
 import { runChecks } from './doctor/checks.js';
 import { exitCode, formatReport } from './doctor/report.js';
-import { anthropicChecker, anthropicWriter, loadEnrichPrompts } from './enrich/anthropic.js';
+import { anthropicChecker, anthropicWriter, loadEnrichPrompts, type ModelFn } from './enrich/anthropic.js';
 import { enrichVertical, type ItemReport } from './enrich/enrich.js';
 import { DEFAULT_WIKI_ENDPOINTS } from './enrich/wikipedia.js';
 import { anthropicPick, loadPickPrompt } from './harvest/anthropic-picker.js';
@@ -101,6 +103,32 @@ function describeCard(item: FormatReport): string {
   if (outcome.status === 'failed') return `${item.format}: failed (${outcome.reason})`;
   const size = Math.round(outcome.bytes / 1024);
   return `${item.format}: rendition ${outcome.renditionId} at ${outcome.localPath} (${size} KB, quote ${outcome.quoteSize}px over ${outcome.lines} lines)`;
+}
+
+function describeCaption(item: PlatformReport): string {
+  const outcome = item.outcome;
+  if (outcome.status === 'failed') {
+    const detail = outcome.problems.length > 0 ? `: ${outcome.problems.join('; ')}` : '';
+    return `${item.platform}: failed (${outcome.reason})${detail}`;
+  }
+  return `${item.platform}: caption ${outcome.captionId}, ${outcome.chars} characters${outcome.checked ? ', fact-checked' : ', verbatim so unchecked'}`;
+}
+
+/**
+ * The caption limits of the one channel serving a platform for this vertical.
+ *
+ * Exactly one, or the run stops. The schema allows several channels for the same vertical and
+ * platform, distinguished only by account_ref, and quietly taking the first would set a caption to
+ * one Page's limits and publish it to another's.
+ */
+function findCaptionChannel(verticalSlug: string, platform: CaptionPlatform): CaptionLimits {
+  const channels = loadConfig(paths.root).channels.filter((c) => c.vertical === verticalSlug && c.platform === platform);
+  const only = channels[0];
+  if (only === undefined || channels.length > 1) {
+    const found = channels.length === 0 ? 'none' : channels.map((c) => c.slug).join(', ');
+    throw new Error(`expected exactly one ${platform} channel for vertical ${verticalSlug}, found ${found}`);
+  }
+  return { textMax: only.caption.text_max, titleMax: only.caption.title_max };
 }
 
 /** The vertical a post belongs to, since compose selects a post rather than a vertical. */
@@ -301,6 +329,64 @@ program
     );
     for (const item of report.items) console.log(describeCard(item));
     console.log(`post ${report.postId}: ${report.written} rendered, ${report.failed} failed`);
+    if (report.failed > 0) process.exitCode = 1;
+  });
+
+program
+  .command('caption')
+  .description("Write a post's per-platform captions from its approved text; exits 1 if a platform's caption could not be written")
+  .requiredOption('--post <id>', 'the post to caption')
+  .option('--platforms <list>', `comma-separated platforms (${CAPTION_PLATFORMS.join(', ')}); defaults to every channel the vertical has`)
+  .action(async (opts: { post: string; platforms?: string }) => {
+    // Judged from the arguments alone first, so a typo is reported without a database or a post.
+    const postId = Number(opts.post);
+    if (!Number.isInteger(postId) || postId < 1) throw new Error(`--post must be a positive integer, got ${opts.post}`);
+    const named = opts.platforms?.split(',').map((platform) => platform.trim()).filter((platform) => platform !== '');
+    if (named !== undefined && named.length === 0) throw new Error('--platforms must name at least one platform');
+    for (const platform of named ?? []) {
+      if (!isCaptionPlatform(platform)) throw new Error(`unknown platform: ${platform}; expected ${CAPTION_PLATFORMS.join(', ')}`);
+    }
+
+    const db = openMigratedDb();
+    const postVerticalId = db.prepare('SELECT vertical_id FROM posts WHERE id = ?').pluck().get(postId) as number | undefined;
+    if (postVerticalId === undefined) throw new Error(`post ${postId} does not exist`);
+    const { vertical, verticalId } = findVerticalById(db, postVerticalId);
+    const enrich = vertical.enrich;
+    if (enrich === undefined) throw new Error(`vertical ${vertical.slug} has no enrich section, which names the model that checks a caption`);
+
+    const platforms: readonly CaptionPlatform[] = named === undefined ? [...CAPTION_PLATFORMS] : (named as CaptionPlatform[]);
+    const limits = Object.fromEntries(platforms.map((platform) => [platform, findCaptionChannel(vertical.slug, platform)])) as Record<
+      CaptionPlatform,
+      CaptionLimits
+    >;
+
+    // The checker is built on first use, not up front. A caption assembled from approved prose is
+    // verbatim and needs no check, which today is every caption, so demanding a key here would
+    // refuse the command to anyone without one for a call that would never be made.
+    let checker: ModelFn | undefined;
+    const check: ModelFn = (system, user) => {
+      if (checker === undefined) {
+        if (!process.env.ANTHROPIC_API_KEY?.trim()) {
+          throw new Error('a caption is not verbatim approved text and must be fact-checked, but ANTHROPIC_API_KEY is not set');
+        }
+        checker = anthropicChecker(new Anthropic({ timeout: 600_000, maxRetries: 2 }), enrich.checker_model);
+      }
+      return checker(system, user);
+    };
+
+    const report = await runStage(db, { stage: 'caption', verticalId }, () =>
+      captionPost({
+        db,
+        postId,
+        platforms,
+        limits,
+        check,
+        checkPrompt: loadEnrichPrompts(paths.root, vertical.slug).check,
+        log,
+      }),
+    );
+    for (const item of report.items) console.log(describeCaption(item));
+    console.log(`post ${report.postId}: ${report.written} written, ${report.failed} failed; fact checks run: ${report.checked}`);
     if (report.failed > 0) process.exitCode = 1;
   });
 

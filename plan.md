@@ -2813,9 +2813,14 @@ Every milestone below follows the same opening ritual:
 - Check the output on a real phone, then stop fiddling (spec §10).
 
 **2.7 Captions** — `src/caption/facebook.ts`, `src/caption/pinterest.ts`
-- Enforce `caption.text_max` / `title_max` from the channel config. Pinterest copy is written for search: plain keywords, no hashtag spam.
-- Always append the AI disclosure for `generated` images, and the attribution when the license requires it.
-- Re-run the fact-check gate on any caption that isn't a pure truncation of approved text.
+- Enforce `caption.text_max` / `title_max` from the channel config. Pinterest copy is written for search: plain keywords, no hashtag spam. No migration: `captions` and its `UNIQUE(post_id, platform)` have existed since `001_initial.sql`.
+- **No writer model anywhere in this stage.** Adapters select and format, they do not write (spec §15), so a caption is only ever the post's approved prose selected, trimmed or rearranged. The only model call is the checker.
+- **A caption is a pure truncation when every sentence is a literal substring of the approved post text**, after folding whitespace (user decision 2026-09-16). Trimming to a limit drops whole sentences and never appends an ellipsis, so a shortened caption stays verbatim and spends nothing. Everything else is checked against the post's cited sources, and a caption with any problem writes no row at all.
+- Always append the AI disclosure for `generated` images. **The attribution line is a dead path and is not implemented**: §10 permits only `public-domain` and `cc0`, and neither obliges a caption credit — the credit belongs on the archive page. The disclosure is kept and tested because §9 mandates it and the science vertical will generate images.
+- Reading a post's cited sources means reading `post_sources`, which enrichment has written and nothing has ever read back. This milestone adds that reader, and a reader for the post's own hook, body and closer.
+- Pinterest's title comes from the approved hook (so it is verbatim and needs no check); `hashtags` stays null for both channels and `link` stays null until the archive site ships in Phase 8.
+- Exactly one channel may serve a (vertical, platform) pair, or the run stops: the schema allows several, and silently taking the first would set a caption to one Page's limits and publish it to another's.
+- YouTube captions are deliberately out of scope; Phase 2's bar is Facebook and Pinterest.
 
 ### Phase 3 — Review UI
 
