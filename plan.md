@@ -2770,6 +2770,8 @@ Every milestone below follows the same opening ritual:
 
 > **Status:** enrichment and fact-check (2.4) are built on branch `phase-2-enrich` (docs/plans/phase-2-enrich.md, Tasks N1-N7). User decisions 2026-09-15: `claude-opus-5` writes, with server-side fallback, and `claude-sonnet-5` checks; the only background facts are paragraphs of the author's and the work's Wikipedia articles, found through Wikidata and stored as tier 3 sources of the quote; a draft with problems gets one visible revision before `needs_review`. Where the build differs from the bullets below: the fact check sees the paragraphs the draft cites rather than every stored source, the gates also check the post shape and the cited labels, and `alt_text` is fixed text built from the quote until the media stage chooses an image. After the final review: failed quotes are recorded (`enrich_failures`) and no longer offered after three failures unless `--retry-failed`, a collection or ambiguous title uses the author's article alone, and the fact check is told the quotation's work and author. Everything is tested against local servers; two live smoke runs on 2026-09-15 drafted posts for two quotes each in about 45 s, and one of them exercised the revision.
 
+> **Status:** the Wikimedia image lookup (2.5) is built on branch `phase-2-media` (docs/plans/phase-2-media.md, Tasks P1-P4). User decisions 2026-09-15: an author's portrait comes from Wikidata `P18` and then from the files Commons records as depicting them; only public domain and CC0 (not `cc-by`) may be published; a file carrying a third-party rights claim is skipped; one portrait serves all of that author's posts. Migration 008 keeps the file page, mime, bytes and sha256 on `images`. A live run of the selection code on 2026-09-15 chose a portrait for all four authors: Dickens and Austen through the depicts fallback (their `P18` images are too small, CC BY-SA, or rights-claimed), Twain and Wilde straight from `P18`.
+
 *Done when (spec §14):* 20 finished literature posts exist on disk in `square` and `pin` that you would be happy to publish.
 
 **2.1 Gutendex harvester** — `src/harvest/gutendex.ts`
@@ -2796,7 +2798,7 @@ Every milestone below follows the same opening ritual:
 - Model tier: `claude-opus-5` writes and `claude-sonnet-5` checks (open decision #6, decided 2026-09-15).
 
 **2.5 Wikimedia image lookup** — `src/media/wikimedia.ts`
-- Wikidata `P18` → Commons `imageinfo` + `extmetadata`. Map the license to the whitelist (`public-domain` | `cc0` | `cc-by`); anything else is rejected. Store attribution.
+- Wikidata `P18` → Commons `imageinfo` + `extmetadata`. Map the license to the whitelist (`public-domain` | `cc0`, user decision 2026-09-15); anything else is rejected. Store attribution.
 - Reject a short edge under 1500 px. Keep the original under `data/media/source/`.
 - Fallback order for authors without a usable portrait: title page, manuscript page, period image of the setting. **Never generated.** Make `generateImage` refuse structurally when `subject.kind === 'author'` and give that refusal its own test.
 - Never replace the image on an `approved` post.

@@ -17,10 +17,13 @@ import { anthropicPick, loadPickPrompt } from './harvest/anthropic-picker.js';
 import { harvestVertical, type AuthorReport } from './harvest/harvest.js';
 import { createHttpGet, DEFAULT_ENDPOINTS } from './harvest/sources.js';
 import { redactUrl } from './lib/cache.js';
+import { downloadWithRetry } from './lib/download.js';
 import { buildUserAgent } from './lib/http.js';
 import { createLogger } from './lib/log.js';
 import { findProjectRoot, resolvePaths } from './lib/paths.js';
 import { runStage } from './lib/run-stage.js';
+import { DEFAULT_MEDIA_ENDPOINTS, MAX_IMAGE_BYTES } from './media/commons.js';
+import { mediaVertical, type PostImageReport } from './media/media.js';
 import { verifyVertical } from './verify/run.js';
 
 const USER_AGENT_VERSION = '0.1';
@@ -81,6 +84,14 @@ function describeItem(item: ItemReport): string {
   const revised = outcome.rounds > 1 ? ', after one revision' : '';
   if (outcome.status === 'draft') return `${head}: post ${outcome.postId} drafted${revised}`;
   return `${head}: post ${outcome.postId} needs review${revised}: ${outcome.problems.join('; ')}`;
+}
+
+function describeImage(item: PostImageReport): string {
+  const head = `post ${item.postId} (${item.author})`;
+  const outcome = item.outcome;
+  if (outcome.status === 'failed') return `${head}: failed (${outcome.reason})`;
+  if (outcome.status === 'reused') return `${head}: image ${outcome.imageId} reused`;
+  return `${head}: image ${outcome.imageId} from ${outcome.title} (${outcome.from}; ${outcome.refused} refused)`;
 }
 
 program
@@ -196,6 +207,41 @@ program
     if (report.givenUp > 0) {
       console.log(`given up after ${MAX_ENRICH_FAILURES} failed attempts: ${report.givenUp} (run with --retry-failed to try them again)`);
     }
+    if (report.failed > 0) process.exitCode = 1;
+  });
+
+program
+  .command('media')
+  .description('Give each post a public-domain source image from Wikimedia Commons; exits 1 if a post could not be given one')
+  .requiredOption('--vertical <slug>', 'the vertical to give images')
+  .option('--limit <n>', 'give an image to at most this many posts', '25')
+  .option('--refresh', 'ignore cached Wikidata and Commons responses and fetch again')
+  .action(async (opts: { vertical: string; limit: string; refresh?: boolean }) => {
+    const limit = Number(opts.limit);
+    if (!Number.isInteger(limit) || limit < 1) throw new Error(`--limit must be a positive integer, got ${opts.limit}`);
+    const db = openMigratedDb();
+    const { verticalId } = findVertical(db, opts.vertical);
+    const userAgent = buildUserAgent(process.env.LANTERN_CONTACT, USER_AGENT_VERSION);
+    const report = await runStage(db, { stage: 'media', verticalId }, () =>
+      mediaVertical({
+        db,
+        verticalId,
+        get: cachedGet(opts.refresh === true),
+        endpoints: DEFAULT_MEDIA_ENDPOINTS,
+        // Originals are streamed under data/media/source/, never into the response cache.
+        download: async (url, destPath) =>
+          downloadWithRetry(url, destPath, {
+            userAgent,
+            maxBytes: MAX_IMAGE_BYTES,
+            onRetry: (event) => log.warn('download retry', { ...event, url: redactUrl(event.url) }),
+          }),
+        mediaDir: paths.media,
+        limit,
+        log,
+      }),
+    );
+    for (const item of report.items) console.log(describeImage(item));
+    console.log(`images: ${report.attached} downloaded, ${report.reused} reused; failed: ${report.failed}`);
     if (report.failed > 0) process.exitCode = 1;
   });
 

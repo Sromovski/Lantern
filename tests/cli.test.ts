@@ -207,4 +207,26 @@ describe('lantern CLI', () => {
     expect(res.out).toContain('posts: 0 draft, 0 needs review; failed: 0');
     expect(existsSync(cache)).toBe(false);
   }, 30_000);
+
+  it('media refuses a bad limit, pending migrations and an unknown vertical, and writes nothing when no post needs an image', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'lantern-cli-'));
+    const badLimit = lantern(['media', '--vertical', 'literature', '--limit', '0'], scratch);
+    expect(badLimit.code).toBe(1);
+    expect(badLimit.out).toContain('--limit must be a positive integer, got 0');
+
+    const pending = lantern(['media', '--vertical', 'literature'], scratch);
+    expect(pending.code).toBe(1);
+    expect(pending.out).toContain('run lantern migrate');
+
+    expect(lantern(['migrate'], scratch).code).toBe(0);
+    const unknown = lantern(['media', '--vertical', 'poetry'], scratch);
+    expect(unknown.code).toBe(1);
+    expect(unknown.out).toContain('unknown vertical: poetry');
+
+    const media = join(scratch, 'media');
+    const res = lantern(['media', '--vertical', 'literature'], scratch, { env: { LANTERN_MEDIA: media, LANTERN_CACHE: join(scratch, 'cache') } });
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('images: 0 downloaded, 0 reused; failed: 0');
+    expect(existsSync(media)).toBe(false);
+  }, 60_000);
 });

@@ -333,10 +333,14 @@ CREATE TABLE images (
   item_id       INTEGER REFERENCES items(id),
   origin        TEXT NOT NULL,          -- 'wikimedia'|'loc'|'met'|'nypl'|'openverse'|'generated'
   source_url    TEXT,
-  license       TEXT NOT NULL,          -- 'public-domain'|'cc0'|'cc-by'|'generated'
-  attribution   TEXT,
-  local_path    TEXT NOT NULL,
+  license       TEXT NOT NULL,          -- 'public-domain'|'cc0'|'generated'
+  attribution   TEXT,                   -- the creator as the source states it
+  local_path    TEXT NOT NULL,          -- the original, relative to the media directory
   width         INTEGER, height INTEGER,
+  file_page_url TEXT,                   -- the source's own page for the file, where the licence is shown
+  mime          TEXT,
+  bytes         INTEGER,
+  sha256        TEXT,                   -- of the downloaded original
   created_at    TEXT NOT NULL
 );
 
@@ -547,10 +551,20 @@ quotes with fewer failures first and stop offering a quote after three failures,
 unless run with `--retry-failed`. `--refresh` ignores cached Wikidata and
 Wikipedia responses.
 
-**`lantern media --vertical literature`**
-Resolve a source image (§10). Public domain first, AI generation as fallback.
-Stores license + attribution on the `images` row and links it to the post.
-Never overwrites an image on an already-approved post.
+**`lantern media --vertical literature --limit 25`**
+Give each post without an image a source image (§10). For an author, the
+portrait comes from their Wikidata `P18`, and when none of those images may be
+published, from the files Commons records as depicting them (`P180`), largest
+first. Only a public-domain or CC0 still image, at least 1500 px on its short
+edge, taller than it is wide and at most 64 MB, can win; anything carrying a
+rights claim on the reproduction is skipped. The original is streamed under
+`data/media/source/` (never into the response cache) and is refused unless its
+size matches what Commons reported. The `images` row keeps the file url, the
+file page, the licence, the credit, the dimensions and the sha256, and one
+portrait serves every post about that author. A post whose image cannot be found
+or downloaded keeps none, is reported, and is tried again on the next run; the
+command then exits 1. An image is never replaced, so an approved post keeps the
+image it was approved with.
 
 **`lantern compose --post 123 --formats square,pin`**
 Render image renditions with Sharp from the post's source image + text. One
@@ -723,7 +737,10 @@ Public domain first, in this order:
 
 1. **Wikimedia Commons** — MediaWiki API. Resolve the subject's Wikidata
    Q-number, read the `P18` (image) property, then pull the file and its license
-   metadata. This covers nearly every historical author.
+   metadata. This covers nearly every historical author. When no `P18` image is
+   publishable — Dickens's is 814 px on its short edge, and the other is
+   CC BY-SA — fall back to the files Commons records as *depicting* the subject
+   (structured data `P180`), and take the largest that passes the rules.
 2. **Library of Congress** — `loc.gov` JSON API. Strong for American subjects,
    photographs, and historical prints.
 3. **Met Museum Open Access** — public API, no key, `isPublicDomain` flag.
@@ -733,14 +750,20 @@ Public domain first, in this order:
 5. **Openverse** — aggregator; useful as a sweep, but re-check the license on
    the original source before use.
 
-Always confirm the license programmatically from the API response. Never infer
-"it's old so it's fine" — re-photographs and restorations can carry their own
-claims. Store `license` and `attribution`, and render attribution in the caption
-when the license asks for it.
+Always confirm the license programmatically from the API response. Only
+`public-domain` and `cc0` may be published (§2.3), so a caption never carries a
+licence obligation. Never infer "it's old so it's fine" — re-photographs and
+restorations can carry their own claims, so a file whose metadata mentions a
+copyright claim, personality rights or a trademark is skipped even when it is
+tagged public domain, and so is one with a Commons `Restrictions` value. Store
+`license` and `attribution`, and render attribution in the caption when the
+license asks for it.
 
 **Resolution matters more now.** A source image has to survive being cropped to
 both 1:1 and 9:16. Reject sources below ~1500px on the short edge, and store
-enough of the original that a re-crop never needs a re-download.
+enough of the original that a re-crop never needs a re-download. Reject the
+other extreme too: Commons keeps archival scans of hundreds of megabytes, so
+anything past 64 MB is skipped for the next usable candidate.
 
 **AI fallback** fires only when PD search returns nothing usable, and only for
 non-portrait subjects. Prompt built from the item's body and the vertical's
