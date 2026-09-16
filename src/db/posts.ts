@@ -65,6 +65,41 @@ export function countGivenUp(db: Db, verticalId: number): number {
     .get(verticalId, MAX_ENRICH_FAILURES) as number;
 }
 
+export interface PostToCompose {
+  postId: number;
+  verticalId: number;
+  /** Null until the media stage has given the post an image; compose has nothing to compose without one. */
+  imageId: number | null;
+  status: string;
+  /** The quotation, exactly as the source prints it (spec section 8). */
+  body: string;
+  workTitle: string;
+  workYear: number | null;
+  author: string;
+}
+
+/** The one post a compose run is about, with the quotation and the work it comes from. */
+export function postToCompose(db: Db, postId: number): PostToCompose | undefined {
+  return db
+    .prepare(
+      `SELECT p.id AS postId, p.vertical_id AS verticalId, p.image_id AS imageId, p.status,
+              i.body AS body, i.work_title AS workTitle, i.work_year AS workYear, s.name AS author
+       FROM posts p
+       JOIN items i ON i.id = p.item_id
+       JOIN subjects s ON s.id = i.subject_id
+       WHERE p.id = ?`,
+    )
+    .get(postId) as PostToCompose | undefined;
+}
+
+/**
+ * Rewrites a post's alt text once its card exists. Enrich writes a placeholder from the quote alone;
+ * the composed card is what a reader actually sees, so this stage owns the description (plan 2.6).
+ */
+export function updateAltText(db: Db, postId: number, altText: string): boolean {
+  return db.prepare('UPDATE posts SET alt_text = ? WHERE id = ?').run(altText, postId).changes === 1;
+}
+
 export interface PostRound {
   round: 1 | 2;
   draft: unknown;

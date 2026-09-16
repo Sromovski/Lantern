@@ -75,7 +75,6 @@ export interface PostNeedingImage {
 }
 
 /**
-/**
  * Posts of a vertical that have no image yet, oldest first. Only a draft or a post waiting for review is
  * offered: an approved post is what a human approved, picture and all, and a rejected one will never be
  * published (spec sections 5 and 10). A subject without a Wikidata id cannot be looked up and is left
@@ -108,6 +107,35 @@ export function countPostsWithoutSubjectId(db: Db, verticalId: number): number {
     )
     .pluck()
     .get(verticalId) as number;
+}
+
+export interface PostImage {
+  imageId: number;
+  /** Where the original is kept, relative to the media directory. */
+  localPath: string;
+  license: string;
+  /** The creator as Commons states it, or null when it names none. */
+  attribution: string | null;
+  /** The subject the portrait is of, which the card prints and the alt text describes. */
+  author: string;
+  subjectSlug: string;
+}
+
+/**
+ * The image attached to a post, with the credit the card and its alt text need. Returns undefined
+ * when the post has no image yet, which is the compose stage's signal that media has not run for it.
+ */
+export function postImage(db: Db, postId: number): PostImage | undefined {
+  return db
+    .prepare(
+      `SELECT im.id AS imageId, im.local_path AS localPath, im.license, im.attribution, s.name AS author, s.slug AS subjectSlug
+       FROM posts p
+       JOIN images im ON im.id = p.image_id
+       JOIN items i ON i.id = p.item_id
+       JOIN subjects s ON s.id = i.subject_id
+       WHERE p.id = ?`,
+    )
+    .get(postId) as PostImage | undefined;
 }
 
 /** Links an image to a post that has none. Returns false when the post already has one: an image is never replaced. */

@@ -32,3 +32,9 @@ enrich:
   checker_model: claude-sonnet-5      # user's choice, 2026-09-15
   author_article_chars: 30000         # Wikipedia paragraphs offered to the writer, per article
   work_article_chars: 18000
+compose:
+  quote_font: Lora.ttf                # user's choice, 2026-09-15
+  meta_font: WorkSans.ttf             # user's choice, 2026-09-15
+  wordmark: THE COMMONPLACE BOOK      # working name, so it lives in config (spec sections 3 and 16)
+  formats: [square, pin]
+  jpeg_quality: 90                    # the platforms re-encode anyway; q90 keeps cards small without marking the type

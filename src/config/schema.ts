@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const PLATFORMS = ['facebook', 'pinterest', 'youtube', 'instagram', 'tiktok'] as const;
 export const RENDITION_FORMATS = ['square', 'portrait', 'pin', 'short', 'landscape'] as const;
+/** The formats the compose stage can actually render; the rest are video or wait for the channels that need them. */
+export const IMAGE_RENDITION_FORMATS = ['square', 'pin'] as const;
 export type Platform = (typeof PLATFORMS)[number];
 export type RenditionFormat = (typeof RENDITION_FORMATS)[number];
 
@@ -40,6 +42,19 @@ export const enrichSchema = z.strictObject({
   work_article_chars: z.number().int().min(1000).max(100_000),
 });
 
+export const composeSchema = z.strictObject({
+  /** The serif the quotation is set in, named relative to assets/fonts/. */
+  quote_font: z.string().min(1),
+  /** The sans the author, the work and the wordmark are set in. */
+  meta_font: z.string().min(1),
+  /** The page name as it appears on every card. The public name is still open (spec section 3), so it lives here, not in code. */
+  wordmark: z.string().min(1),
+  /** The formats composed for this vertical by default. */
+  formats: z.array(z.enum(IMAGE_RENDITION_FORMATS)).min(1),
+  /** JPEG quality for composed cards; the platforms re-encode anyway, so this buys size, not fidelity. */
+  jpeg_quality: z.number().int().min(60).max(100),
+});
+
 export const verticalSchema = z
   .strictObject({
     slug,
@@ -58,6 +73,7 @@ export const verticalSchema = z
     }),
     harvest: harvestSchema.optional(),
     enrich: enrichSchema.optional(),
+    compose: composeSchema.optional(),
   })
   .superRefine((v, ctx) => {
     if (v.kid_safe && (!v.audience.reading_level || v.banned_topics.length === 0)) {
@@ -107,3 +123,5 @@ export type VerticalConfig = z.infer<typeof verticalSchema>;
 export type ChannelConfig = z.infer<typeof channelSchema>;
 export type HarvestConfig = z.infer<typeof harvestSchema>;
 export type EnrichConfig = z.infer<typeof enrichSchema>;
+export type ComposeConfig = z.infer<typeof composeSchema>;
+export type ImageRenditionFormat = (typeof IMAGE_RENDITION_FORMATS)[number];
