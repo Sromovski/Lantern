@@ -13,14 +13,6 @@ export interface NewCaption {
   link: string | null;
 }
 
-export interface StoredCaption {
-  id: number;
-  platform: string;
-  title: string | null;
-  text: string;
-  charCount: number;
-}
-
 /**
  * Writes one platform's caption, replacing the row that platform already has.
  *
@@ -54,16 +46,4 @@ export function upsertCaption(db: Db, caption: NewCaption, now: Date = new Date(
     now.toISOString(),
   );
   return db.prepare('SELECT id FROM captions WHERE post_id = ? AND platform = ?').pluck().get(caption.postId, caption.platform) as number;
-}
-
-/** Every caption a post has, for the review UI and for deciding what the stage still owes it. */
-export function postCaptions(db: Db, postId: number): StoredCaption[] {
-  return db
-    .prepare(
-      `SELECT id, platform, title, text, char_count AS charCount
-       FROM captions
-       WHERE post_id = ?
-       ORDER BY platform`,
-    )
-    .all(postId) as StoredCaption[];
 }

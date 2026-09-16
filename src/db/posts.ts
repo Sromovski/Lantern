@@ -126,7 +126,7 @@ export function postCitedSources(db: Db, postId: number): CitedSource[] {
        FROM post_sources ps
        JOIN sources so ON so.id = ps.source_id
        WHERE ps.post_id = ?
-       ORDER BY ps.label`,
+       ORDER BY CAST(SUBSTR(ps.label, 2) AS INTEGER), ps.label`,
     )
     .all(postId) as CitedSource[];
 }
