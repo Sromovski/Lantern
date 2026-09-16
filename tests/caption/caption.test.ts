@@ -111,7 +111,18 @@ function seed(hook = HOOK, body = BODY, closer = CLOSER): number {
       },
     ],
   };
-  return insertPost(db, post, NOW);
+  const postId = insertPost(db, post, NOW);
+
+  const imageId = id(
+    `INSERT INTO images (subject_id, origin, source_url, file_page_url, license, attribution, local_path, width, height, mime, bytes, sha256, created_at)
+     VALUES (?, 'wikimedia', ?, 'https://commons.wikimedia.org/wiki/File:P.jpg', 'public-domain', 'Popular Graphic Arts', 'source/p.jpg', 800, 1000, 'image/jpeg', 1, 'a', ?)`,
+    subjectId,
+    `https://upload.wikimedia.org/x/P${++seq}.jpg`,
+    NOW.toISOString(),
+  );
+  db.prepare('UPDATE posts SET image_id = ? WHERE id = ?').run(imageId, postId);
+
+  return postId;
 }
 
 const run = (platforms: readonly CaptionPlatform[], check: ModelFn = supportive, post = postId) =>
@@ -185,21 +196,22 @@ describe('captionPost', () => {
     expect(db.prepare('SELECT COUNT(*) FROM captions').pluck().get()).toBe(2);
   });
 
-  it('never reaches the checker, because neither builder can produce a caption that is not approved text', async () => {
-    // Worth asserting rather than assuming: as the stage stands today there is no input that makes
-    // the checker fire. Both builders only select and trim the post's own prose, a truncation is
-    // still a substring, and the one line that is not drawn from the post - the AI disclosure - is
-    // on the allowlist. Measured across every shape the builders can emit, including a hook longer
-    // than Pinterest's title_max (cut to a prefix) and a generated image (disclosure appended).
-    const long = seed('Dickens opened his new weekly with a sentence that refuses to settle, and it has never stopped being quoted since.', BODY, CLOSER);
-    db.prepare("UPDATE images SET license = 'generated' WHERE id = (SELECT image_id FROM posts WHERE id = ?)").run(long);
-
-    const report = await run(['facebook', 'pinterest'], refusing, long);
-
-    expect(report).toMatchObject({ written: 2, failed: 0, checked: 0 });
+  it('does not reach the checker for a caption of whole approved sentences', async () => {
+    const report = await run(['facebook']);
+    expect(report).toMatchObject({ written: 1, failed: 0, checked: 0 });
     expect(asked).toEqual([]);
-    // The guard is real even so: this is what changes the day a builder reshapes text instead of
-    // selecting it, which is why the checker stays wired in and tested below.
+  });
+
+  it('checks a pin whose title was cut to fit, and shows the checker that title', async () => {
+    // A cut inside a sentence can reverse it, so a shortened title is judged rather than trusted.
+    const longHook = 'Dickens opened his new weekly with a sentence that refuses to settle, and it has never once stopped being quoted since.';
+    const post = seed(longHook, BODY, CLOSER);
+    const report = await run(['pinterest'], supportive, post);
+
+    expect(report.checked).toBe(1);
+    expect(asked).toHaveLength(1);
+    // The title must appear in what the checker was shown - that was the defect in change 1.
+    expect(asked[0]?.user).toContain('Dickens opened his new weekly');
   });
 
   it('writes no caption when the fact check refuses one', async () => {
@@ -272,6 +284,12 @@ describe('captionPost', () => {
   it('refuses a post that does not exist', async () => {
     await expect(run(['facebook'], supportive, 9999)).rejects.toThrow('post 9999 does not exist');
   });
+
+  it('refuses a post that is not waiting for captions', async () => {
+    const post = seed();
+    db.prepare("UPDATE posts SET status = 'rejected' WHERE id = ?").run(post);
+    await expect(run(['facebook'], supportive, post)).rejects.toThrow('is rejected, so it is not waiting for captions');
+  });
 });
 
 describe('the checker adapter', () => {
@@ -283,7 +301,7 @@ describe('the checker adapter', () => {
   });
 
   it('shows a cited source under the label the post used', () => {
-    expect(formatSource({ label: 'S1', tier: 3, url: null, citation: 'Wikipedia, Charles Dickens, lead', excerpt: 'He ran a weekly.' })).toBe(
+    expect(formatSource({ label: 'S1', citation: 'Wikipedia, Charles Dickens, lead', excerpt: 'He ran a weekly.' })).toBe(
       '[S1] (Wikipedia, Charles Dickens, lead) He ran a weekly.',
     );
   });

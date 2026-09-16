@@ -34,11 +34,12 @@ describe('unapprovedSentences', () => {
     expect(unapprovedSentences('Dickens   wrote   the line in 1859.', APPROVED)).toEqual([]);
   });
 
-  it('accepts a sentence cut short, since a truncation adds no claim', () => {
-    // Pinterest's title is a word-boundary cut of the hook, so prefixes must pass or every pin
-    // would cost a fact check for text that is plainly approved.
-    expect(unapprovedSentences('Dickens wrote the line', APPROVED)).toEqual([]);
-    expect(unapprovedSentences('Dickens wrote', APPROVED)).toEqual([]);
+  it('flags a sentence cut short, because a cut can reverse its meaning', () => {
+    // "The story that he burned the manuscript is a myth." cut to fit a title asserts the myth.
+    // A shortened sentence is therefore judged, not trusted.
+    const myth = 'The story that he burned the manuscript is a myth.';
+    expect(unapprovedSentences('The story that he burned the manuscript', myth)).toEqual(['The story that he burned the manuscript']);
+    expect(unapprovedSentences(myth, myth)).toEqual([]);
   });
 
   it('catches a sentence stitched across two approved sentences', () => {

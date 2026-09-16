@@ -11,8 +11,7 @@ import { unsupportedNumbers } from '../verify/numbers.js';
 import type { BuiltCaption, CaptionLimits } from './facebook.js';
 import { facebookCaption } from './facebook.js';
 import { pinterestCaption } from './pinterest.js';
-import { CaptionConfigError } from './text.js';
-import { unapprovedSentences } from './text.js';
+import { CaptionConfigError, unapprovedSentences } from './text.js';
 
 /** A caption this post cannot have: the run says why rather than writing one that was never judged. */
 export class CaptionError extends Error {
@@ -140,7 +139,9 @@ async function judge(
   const unapproved = unapprovedSentences(`${built.title ?? ''}\n${built.text}`, approvedText(post));
   if (unapproved.length === 0) return { problems, checked: false };
 
-  const sentences = captionSentences(built.text);
+  // The checker is shown everything the gate judged, title included. Judging on title + text while
+  // showing the model only the text means an invented title buys a model call that cannot see it.
+  const sentences = captionSentences(built.title === null ? built.text : `${built.title}\n\n${built.text}`);
   const answer = await options.check(options.checkPrompt, captionCheckMessage(post, cited, sentences));
   const parsed = checkSchema.safeParse(answer.value);
   if (!parsed.success) throw new CaptionError(`the fact check for the caption was not the expected shape: ${parsed.error.message}`);
@@ -161,6 +162,11 @@ export async function captionPost(options: CaptionOptions): Promise<CaptionRepor
   if (post === undefined) {
     const exists = options.db.prepare('SELECT 1 FROM posts WHERE id = ?').pluck().get(options.postId) !== undefined;
     throw new CaptionError(exists ? `post ${options.postId} has no subject, so its caption has no author` : `post ${options.postId} does not exist`);
+  }
+  // Only a draft or a post waiting for review is captioned. An approved post keeps the text a human
+  // approved, and a rejected one will never be published (spec sections 5 and 7).
+  if (post.status !== 'draft' && post.status !== 'needs_review') {
+    throw new CaptionError(`post ${options.postId} is ${post.status}, so it is not waiting for captions`);
   }
   const cited = postCitedSources(options.db, options.postId);
   if (cited.length === 0) throw new CaptionError(`post ${options.postId} has no cited sources, so no caption could be checked against them`);

@@ -67,7 +67,6 @@ export function countGivenUp(db: Db, verticalId: number): number {
 
 export interface PostForCaption {
   postId: number;
-  verticalId: number;
   status: string;
   /** The post's own editorial prose, which is what a caption is built from. */
   hook: string;
@@ -81,7 +80,6 @@ export interface PostForCaption {
    */
   quotation: string;
   workTitle: string;
-  workYear: number | null;
   author: string;
   /** Null when the media stage has not run; 'generated' is what obliges a caption to disclose (spec section 9). */
   imageLicense: string | null;
@@ -91,8 +89,8 @@ export interface PostForCaption {
 export function postForCaption(db: Db, postId: number): PostForCaption | undefined {
   return db
     .prepare(
-      `SELECT p.id AS postId, p.vertical_id AS verticalId, p.status, p.hook, p.body, p.closer,
-              i.body AS quotation, i.work_title AS workTitle, i.work_year AS workYear,
+      `SELECT p.id AS postId, p.status, p.hook, p.body, p.closer,
+              i.body AS quotation, i.work_title AS workTitle,
               s.name AS author, im.license AS imageLicense
        FROM posts p
        JOIN items i ON i.id = p.item_id
@@ -106,8 +104,6 @@ export function postForCaption(db: Db, postId: number): PostForCaption | undefin
 export interface CitedSource {
   /** The label the post's drafts cite it by (S1, S2, ...). */
   label: string;
-  tier: number;
-  url: string | null;
   citation: string;
   excerpt: string | null;
 }
@@ -122,7 +118,7 @@ export interface CitedSource {
 export function postCitedSources(db: Db, postId: number): CitedSource[] {
   return db
     .prepare(
-      `SELECT ps.label, so.tier, so.url, so.citation, so.excerpt
+      `SELECT ps.label, so.citation, so.excerpt
        FROM post_sources ps
        JOIN sources so ON so.id = ps.source_id
        WHERE ps.post_id = ?

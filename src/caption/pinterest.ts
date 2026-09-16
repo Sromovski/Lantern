@@ -1,6 +1,6 @@
 import type { PostForCaption } from '../db/posts.js';
 import type { BuiltCaption, CaptionLimits } from './facebook.js';
-import { disclosureFor } from './facebook.js';
+import { reserveDisclosure } from './facebook.js';
 import { CaptionConfigError, fitSentences, joinParagraphs, truncateAtWord } from './text.js';
 
 /**
@@ -18,14 +18,8 @@ export function pinterestCaption(post: PostForCaption, limits: CaptionLimits): B
   if (limits.titleMax === undefined) {
     throw new CaptionConfigError('a pinterest channel must set caption.title_max, since every pin carries a title');
   }
-  const disclosure = disclosureFor(post.imageLicense);
-  const reserved = disclosure === null ? 0 : [...disclosure].length + 2;
-  if (disclosure !== null && limits.textMax <= reserved) {
-    throw new CaptionConfigError(
-      `a channel with text_max ${limits.textMax} cannot carry the ${[...disclosure].length}-character AI disclosure this image requires`,
-    );
-  }
-  const description = fitSentences(joinParagraphs([post.body, post.closer]), Math.max(0, limits.textMax - reserved));
+  const { disclosure, budget } = reserveDisclosure(post.imageLicense, limits.textMax);
+  const description = fitSentences(joinParagraphs([post.body, post.closer]), budget);
   return {
     title: truncateAtWord(post.hook.trim(), limits.titleMax),
     text: disclosure === null ? description : `${description}\n\n${disclosure}`,

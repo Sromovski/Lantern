@@ -20,6 +20,19 @@ export function disclosureFor(imageLicense: string | null): string | null {
   return imageLicense === 'generated' ? (BOILERPLATE[0] ?? null) : null;
 }
 
+/** The room a caption must leave for its disclosure line, and the refusal when a channel has none. */
+export function reserveDisclosure(imageLicense: string | null, textMax: number): { disclosure: string | null; budget: number } {
+  const disclosure = disclosureFor(imageLicense);
+  if (disclosure === null) return { disclosure: null, budget: textMax };
+  const reserved = [...disclosure].length + 2;
+  if (textMax <= reserved) {
+    throw new CaptionConfigError(
+      `a channel with text_max ${textMax} cannot carry the ${[...disclosure].length}-character AI disclosure this image requires`,
+    );
+  }
+  return { disclosure, budget: textMax - reserved };
+}
+
 /**
  * Facebook's caption: the post's own prose, trimmed to the channel's limit.
  *
@@ -31,14 +44,8 @@ export function disclosureFor(imageLicense: string | null): string | null {
  * trimmed to exactly the limit and then pushed over it by the line that has to be there.
  */
 export function facebookCaption(post: PostForCaption, limits: CaptionLimits): BuiltCaption {
-  const disclosure = disclosureFor(post.imageLicense);
-  const reserved = disclosure === null ? 0 : [...disclosure].length + 2;
-  if (disclosure !== null && limits.textMax <= reserved) {
-    throw new CaptionConfigError(
-      `a channel with text_max ${limits.textMax} cannot carry the ${[...disclosure].length}-character AI disclosure this image requires`,
-    );
-  }
-  const prose = fitSentences(joinParagraphs([post.hook, post.body, post.closer]), Math.max(0, limits.textMax - reserved));
+  const { disclosure, budget } = reserveDisclosure(post.imageLicense, limits.textMax);
+  const prose = fitSentences(joinParagraphs([post.hook, post.body, post.closer]), budget);
   return {
     title: null,
     text: disclosure === null ? prose : `${prose}\n\n${disclosure}`,

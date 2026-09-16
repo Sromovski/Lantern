@@ -27,18 +27,16 @@ const folded = (text: string): string => normalizeText(text);
  * stitches two approved clauses together can imply something neither of them said.
  */
 export function unapprovedSentences(caption: string, approved: string): string[] {
-  // A caption sentence must be a whole approved sentence, or the start of one. Truncating to a
-  // channel's limit leaves a prefix, which introduces no claim and needs no check. A stitch is a
-  // prefix of nothing: it runs past the end of one approved sentence into the next, which is how
-  // "He ran a weekly magazine. In 1859 he wrote the line." could otherwise yield "He ran a weekly
-  // magazine in 1859" - a claim neither sentence makes. Comparing against the joined text instead
-  // would miss that entirely, because normalizeText strips the end punctuation between them.
-  const exact = new Set(BOILERPLATE.map(folded));
-  const sentences = splitSentences(approved).map(folded).filter((text) => text !== '');
+  // A caption sentence must be a whole approved sentence. Trimming to a limit drops whole trailing
+  // sentences, so it still costs nothing. A prefix is deliberately NOT accepted: a cut inside a
+  // sentence can reverse it - "The story that he burned the manuscript is a myth." becomes an
+  // assertion that he burned it - so a shortened title is judged rather than trusted. Comparing
+  // against the joined approved text would be worse still: normalizeText strips end punctuation, so
+  // a caption fusing the end of one approved sentence to the start of the next would match it.
+  const approvedSentences = new Set([...BOILERPLATE, ...splitSentences(approved)].map(folded).filter((text) => text !== ''));
   return splitSentences(caption).filter((sentence) => {
     const needle = folded(sentence);
-    if (needle === '' || exact.has(needle)) return false;
-    return !sentences.some((approvedSentence) => approvedSentence === needle || approvedSentence.startsWith(needle));
+    return needle !== '' && !approvedSentences.has(needle);
   });
 }
 

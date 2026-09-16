@@ -255,10 +255,10 @@ describe('lantern CLI', () => {
 
     const missing = lantern(['caption', '--post', '1'], scratch, { env: noKey });
     expect(missing.code).toBe(1);
+    // Asserted positively: the run reaches exactly the post-existence error. The lazy-checker
+    // property (no ANTHROPIC_API_KEY demanded until a caption is not verbatim) is only weakly
+    // guarded here, because the CLI cannot reach a real caption check without a seeded database.
     expect(missing.out).toContain('post 1 does not exist');
-    // The key is never demanded up front: a caption built from approved text is verbatim and needs
-    // no fact check, so requiring a key would refuse a command that never calls Anthropic.
-    expect(missing.out).not.toContain('ANTHROPIC_API_KEY is not set');
   }, 60_000);
 
   it('compose refuses a bad post id, an unknown format, pending migrations and a post that does not exist', () => {

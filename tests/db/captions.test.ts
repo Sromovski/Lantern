@@ -49,7 +49,7 @@ describe('postCitedSources', () => {
   it('returns each cited source once, with its citation and excerpt', () => {
     const cited = postCitedSources(db, postId);
     expect(cited).toHaveLength(12);
-    expect(cited[0]).toEqual({ label: 'S1', tier: 3, url: null, citation: 'citation 1', excerpt: 'excerpt 1' });
+    expect(cited[0]).toEqual({ label: 'S1', citation: 'citation 1', excerpt: 'excerpt 1' });
   });
 });
 

@@ -7,7 +7,7 @@ import { captionPost, CAPTION_PLATFORMS, isCaptionPlatform, type CaptionPlatform
 import type { CaptionLimits } from './caption/facebook.js';
 import { composePost, type FormatReport } from './compose/compose.js';
 import { IMAGE_FORMAT_NAMES, isImageFormat, type ImageFormat } from './compose/formats.js';
-import { loadConfig } from './config/load.js';
+import { loadConfig, type LoadedChannel } from './config/load.js';
 import { openDb, type Db } from './db/connection.js';
 import { migrate, pendingMigrations } from './db/migrate.js';
 import { MAX_ENRICH_FAILURES } from './db/posts.js';
@@ -121,11 +121,11 @@ function describeCaption(item: PlatformReport): string {
  * platform, distinguished only by account_ref, and quietly taking the first would set a caption to
  * one Page's limits and publish it to another's.
  */
-function findCaptionChannel(verticalSlug: string, platform: CaptionPlatform): CaptionLimits {
-  const channels = loadConfig(paths.root).channels.filter((c) => c.vertical === verticalSlug && c.platform === platform);
-  const only = channels[0];
-  if (only === undefined || channels.length > 1) {
-    const found = channels.length === 0 ? 'none' : channels.map((c) => c.slug).join(', ');
+function findCaptionChannel(channels: readonly LoadedChannel[], verticalSlug: string, platform: CaptionPlatform): CaptionLimits {
+  const matches = channels.filter((c) => c.vertical === verticalSlug && c.platform === platform);
+  const only = matches[0];
+  if (only === undefined || matches.length > 1) {
+    const found = matches.length === 0 ? 'none' : matches.map((c) => c.slug).join(', ');
     throw new Error(`expected exactly one ${platform} channel for vertical ${verticalSlug}, found ${found}`);
   }
   return { textMax: only.caption.text_max, titleMax: only.caption.title_max };
@@ -354,11 +354,12 @@ program
     const enrich = vertical.enrich;
     if (enrich === undefined) throw new Error(`vertical ${vertical.slug} has no enrich section, which names the model that checks a caption`);
 
-    const configured = loadConfig(paths.root).channels.filter((c) => c.vertical === vertical.slug);
+    const channels = loadConfig(paths.root).channels;
+    const configured = channels.filter((c) => c.vertical === vertical.slug);
     const platforms: readonly CaptionPlatform[] =
       named === undefined ? CAPTION_PLATFORMS.filter((p) => configured.some((c) => c.platform === p)) : (named as CaptionPlatform[]);
     if (platforms.length === 0) throw new Error(`vertical ${vertical.slug} has no facebook or pinterest channel to caption for`);
-    const limits = Object.fromEntries(platforms.map((platform) => [platform, findCaptionChannel(vertical.slug, platform)])) as Record<
+    const limits = Object.fromEntries(platforms.map((platform) => [platform, findCaptionChannel(channels, vertical.slug, platform)])) as Record<
       CaptionPlatform,
       CaptionLimits
     >;
