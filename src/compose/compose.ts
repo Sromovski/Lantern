@@ -108,14 +108,15 @@ async function renderFormat(
   const base = await sharp(join(options.mediaDir, image.localPath))
     .resize(spec.width, spec.height, { fit: 'cover', position: 'top' })
     .toBuffer();
-  const info = await sharp(base)
-    .composite([{ input: Buffer.from(layout.svg), top: 0, left: 0 }])
-    .jpeg({ quality: options.config.jpeg_quality })
-    .toFile(destPath);
-
-  // From here until the row exists, any failure removes the file. A rendition row must name a file
-  // that exists, and a file must not outlive the failure of the row meant to describe it.
+  // From the first moment anything may be written until the row exists, any failure removes the
+  // file. A rendition row must name a file that exists, and a file must not outlive the failure of
+  // the row meant to describe it - including a failure of the write itself.
   try {
+    const info = await sharp(base)
+      .composite([{ input: Buffer.from(layout.svg), top: 0, left: 0 }])
+      .jpeg({ quality: options.config.jpeg_quality })
+      .toFile(destPath);
+
     // The rendition matrix is exact (spec section 11); a card of the wrong size is a failure, not a variation.
     if (info.width !== spec.width || info.height !== spec.height) {
       throw new ComposeError(`${format} rendered ${info.width}x${info.height}, but must be ${spec.width}x${spec.height}`);

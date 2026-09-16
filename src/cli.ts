@@ -8,7 +8,7 @@ import { IMAGE_FORMAT_NAMES, isImageFormat, type ImageFormat } from './compose/f
 import { loadConfig } from './config/load.js';
 import { openDb, type Db } from './db/connection.js';
 import { migrate, pendingMigrations } from './db/migrate.js';
-import { MAX_ENRICH_FAILURES, postToCompose } from './db/posts.js';
+import { MAX_ENRICH_FAILURES } from './db/posts.js';
 import { syncConfig } from './db/sync.js';
 import { runChecks } from './doctor/checks.js';
 import { exitCode, formatReport } from './doctor/report.js';
@@ -279,9 +279,11 @@ program
     }
 
     const db = openMigratedDb();
-    const post = postToCompose(db, postId);
-    if (post === undefined) throw new Error(`post ${postId} does not exist`);
-    const { vertical, verticalId } = findVerticalById(db, post.verticalId);
+    // Only the vertical is needed here. composePost owns every other judgement about the post,
+    // including telling a post with no subject apart from one that does not exist.
+    const postVerticalId = db.prepare('SELECT vertical_id FROM posts WHERE id = ?').pluck().get(postId) as number | undefined;
+    if (postVerticalId === undefined) throw new Error(`post ${postId} does not exist`);
+    const { vertical, verticalId } = findVerticalById(db, postVerticalId);
     const compose = vertical.compose;
     if (compose === undefined) throw new Error(`vertical ${vertical.slug} has no compose section`);
     const formats: readonly ImageFormat[] = named === undefined ? compose.formats : (named as ImageFormat[]);
