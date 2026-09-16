@@ -33,6 +33,18 @@ describe('unapprovedSentences', () => {
   it('ignores differences in whitespace only', () => {
     expect(unapprovedSentences('Dickens   wrote the line\nin 1859.', APPROVED)).toEqual([]);
   });
+
+  it('catches a sentence stitched across two approved sentences', () => {
+    // normalizeText strips end punctuation, so the approved text folds into one run and a naive
+    // substring test finds this inside it. It asserts something neither approved sentence says.
+    const two = 'He ran a weekly magazine. In 1859 he wrote the line.';
+    expect(unapprovedSentences('He ran a weekly magazine in 1859.', two)).toEqual(['He ran a weekly magazine in 1859.']);
+
+    // Either sentence on its own is still fine, and case and punctuation still do not matter.
+    expect(unapprovedSentences('He ran a weekly magazine.', two)).toEqual([]);
+    expect(unapprovedSentences('HE RAN A WEEKLY MAGAZINE', two)).toEqual([]);
+    expect(unapprovedSentences('In 1859 he wrote the line.', two)).toEqual([]);
+  });
 });
 
 describe('fitSentences', () => {

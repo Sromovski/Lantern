@@ -27,11 +27,16 @@ const folded = (text: string): string => normalizeText(text);
  * stitches two approved clauses together can imply something neither of them said.
  */
 export function unapprovedSentences(caption: string, approved: string): string[] {
-  const haystack = folded(approved);
-  const allowed = new Set(BOILERPLATE.map(folded));
+  // Each approved sentence is normalised on its own, and a caption sentence must match one of them
+  // whole. Comparing against the joined text instead would dissolve the sentence boundaries:
+  // normalizeText strips end punctuation, so "He ran a magazine. In 1859 he wrote it." becomes one
+  // run, and a caption claiming "He ran a magazine in 1859" - which no approved sentence says -
+  // would be found inside it and ship unchecked. That fusion is the exact danger this gate exists
+  // to catch.
+  const allowed = new Set([...BOILERPLATE, ...splitSentences(approved)].map(folded).filter((text) => text !== ''));
   return splitSentences(caption).filter((sentence) => {
     const needle = folded(sentence);
-    return needle !== '' && !allowed.has(needle) && !haystack.includes(needle);
+    return needle !== '' && !allowed.has(needle);
   });
 }
 

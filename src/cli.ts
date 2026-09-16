@@ -354,7 +354,10 @@ program
     const enrich = vertical.enrich;
     if (enrich === undefined) throw new Error(`vertical ${vertical.slug} has no enrich section, which names the model that checks a caption`);
 
-    const platforms: readonly CaptionPlatform[] = named === undefined ? [...CAPTION_PLATFORMS] : (named as CaptionPlatform[]);
+    const configured = loadConfig(paths.root).channels.filter((c) => c.vertical === vertical.slug);
+    const platforms: readonly CaptionPlatform[] =
+      named === undefined ? CAPTION_PLATFORMS.filter((p) => configured.some((c) => c.platform === p)) : (named as CaptionPlatform[]);
+    if (platforms.length === 0) throw new Error(`vertical ${vertical.slug} has no facebook or pinterest channel to caption for`);
     const limits = Object.fromEntries(platforms.map((platform) => [platform, findCaptionChannel(vertical.slug, platform)])) as Record<
       CaptionPlatform,
       CaptionLimits
