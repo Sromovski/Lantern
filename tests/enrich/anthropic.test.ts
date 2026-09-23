@@ -11,6 +11,7 @@ import {
   FALLBACK_BETA,
   loadEnrichPrompts,
 } from '../../src/enrich/anthropic.js';
+import type { RecordUsage } from '../../src/lib/usage.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const servers: Server[] = [];
@@ -152,5 +153,51 @@ describe('enrich prompts', () => {
     expect(prompts.write).toContain('{{voice}}');
     expect(prompts.revise).toContain('{{body}}');
     expect(prompts.check).toContain('You have no other knowledge for this task.');
+  });
+});
+
+describe('usage recording', () => {
+  type Recorded = [Parameters<RecordUsage>[0], Parameters<RecordUsage>[1]];
+  const recorder = () => {
+    const calls: Recorded[] = [];
+    return { calls, record: ((tag, usage) => void calls.push([tag, usage])) as RecordUsage };
+  };
+
+  it('records the writer call under its tag, billed to the model that served it', async () => {
+    const fallback = { type: 'fallback', from: { model: 'claude-opus-5' }, to: { model: 'claude-sonnet-5' }, trigger: { type: 'refusal' } };
+    const body = { ...message([fallback, text(DRAFT)]), usage: { input_tokens: 1200, output_tokens: 300, cache_read_input_tokens: 7 } };
+    const { client } = await fakeApi([{ status: 200, body }]);
+    const { calls, record } = recorder();
+    await anthropicWriter(client, 'claude-opus-5', record)('s', 'u', { stage: 'enrich', role: 'reviser', itemId: 4 });
+    expect(calls).toEqual([
+      [
+        { stage: 'enrich', role: 'reviser', itemId: 4 },
+        {
+          requestedModel: 'claude-opus-5',
+          model: 'claude-sonnet-5',
+          inputTokens: 1200,
+          outputTokens: 300,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 7,
+          stopReason: 'end_turn',
+        },
+      ],
+    ]);
+  });
+
+  it('records a writer call whose answer is unusable, because it is billed all the same', async () => {
+    const { client } = await fakeApi([{ status: 200, body: message([text('{"hook":')], 'max_tokens') }]);
+    const { calls, record } = recorder();
+    await expect(anthropicWriter(client, 'claude-opus-5', record)('s', 'u', { stage: 'enrich', itemId: 1 })).rejects.toThrow(EnrichResponseError);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![0]).toEqual({ stage: 'enrich', role: 'writer', itemId: 1 });
+    expect(calls[0]![1]).toMatchObject({ outputTokens: 300, stopReason: 'max_tokens' });
+  });
+
+  it('records a checker call, and an untagged call under stage untagged', async () => {
+    const { client } = await fakeApi([{ status: 200, body: message([text('not json')], 'end_turn', 'claude-sonnet-5') }]);
+    const { calls, record } = recorder();
+    await expect(anthropicChecker(client, 'claude-sonnet-5', record)('s', 'u')).rejects.toThrow(EnrichResponseError);
+    expect(calls).toEqual([[{ stage: 'untagged', role: 'checker' }, expect.objectContaining({ model: 'claude-sonnet-5', inputTokens: 1200 })]]);
   });
 });

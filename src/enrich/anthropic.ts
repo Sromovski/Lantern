@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import { report, usageOf, type CallTag, type RecordUsage } from '../lib/usage.js';
 import { checkSchema, draftSchema } from './draft.js';
 
 /** Spec section 15: prompts are content and live in version-controlled files. The writer's are per vertical; the fact check is shared. */
@@ -33,7 +34,8 @@ export interface ModelAnswer {
   outputTokens: number;
 }
 
-export type ModelFn = (system: string, user: string) => Promise<ModelAnswer>;
+/** The tag says what the call is for; a builder given a RecordUsage records every response under it. */
+export type ModelFn = (system: string, user: string, tag?: CallTag) => Promise<ModelAnswer>;
 
 /** A model answered without usable output: a refusal, a truncated answer, text that is not JSON, or JSON of the wrong shape. */
 export class EnrichResponseError extends Error {
@@ -59,9 +61,9 @@ function parseAnswer(role: string, stopReason: string | null, text: string): unk
  * requested model. Errors making the request (the key, the network, rate limits after the SDK's
  * retries) propagate and stop the run; only an unusable answer becomes an EnrichResponseError.
  */
-export function anthropicWriter(client: Anthropic, model: string): ModelFn {
+export function anthropicWriter(client: Anthropic, model: string, record?: RecordUsage): ModelFn {
   const { schema } = zodOutputFormat(draftSchema);
-  return async (system, user) => {
+  return async (system, user, tag) => {
     const response = await client.beta.messages.create({
       model,
       betas: [FALLBACK_BETA],
@@ -79,9 +81,12 @@ export function anthropicWriter(client: Anthropic, model: string): ModelFn {
     // content block appears only when a declining model had already produced output.
     const servedBy = response.usage.iterations?.flatMap((entry) => (entry.type === 'fallback_message' ? [entry.model] : [])).at(-1);
     const handedTo = response.content.flatMap((block) => (block.type === 'fallback' ? [block.to.model] : [])).at(-1);
+    const servedModel = servedBy ?? handedTo ?? response.model;
+    // Recorded before the answer is judged: an unusable answer is billed like a usable one.
+    report(record, tag, 'writer', usageOf(response.usage, model, servedModel, response.stop_reason));
     return {
       value: parseAnswer('writer', response.stop_reason, text),
-      model: servedBy ?? handedTo ?? response.model,
+      model: servedModel,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
     };
@@ -89,9 +94,9 @@ export function anthropicWriter(client: Anthropic, model: string): ModelFn {
 }
 
 /** The fact checker, backed by the Messages API with structured output built from checkSchema. Errors are handled as for the writer. */
-export function anthropicChecker(client: Anthropic, model: string): ModelFn {
+export function anthropicChecker(client: Anthropic, model: string, record?: RecordUsage): ModelFn {
   const { schema } = zodOutputFormat(checkSchema);
-  return async (system, user) => {
+  return async (system, user, tag) => {
     const response = await client.messages.create({
       model,
       max_tokens: 16000,
@@ -99,6 +104,7 @@ export function anthropicChecker(client: Anthropic, model: string): ModelFn {
       messages: [{ role: 'user', content: user }],
       output_config: { format: { type: 'json_schema', schema }, effort: 'medium' },
     });
+    report(record, tag, 'checker', usageOf(response.usage, model, response.model, response.stop_reason));
     const text = response.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('');
     return {
       value: parseAnswer('fact check', response.stop_reason, text),

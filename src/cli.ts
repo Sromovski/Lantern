@@ -21,6 +21,8 @@ import { anthropicPick, loadPickPrompt } from './harvest/anthropic-picker.js';
 import { harvestVertical, type AuthorReport } from './harvest/harvest.js';
 import { createHttpGet, DEFAULT_ENDPOINTS } from './harvest/sources.js';
 import { redactUrl } from './lib/cache.js';
+import { costReport, formatCostReport, loadPricing } from './costs/costs.js';
+import { modelCallRecorder } from './db/model-calls.js';
 import { downloadWithRetry } from './lib/download.js';
 import { buildUserAgent } from './lib/http.js';
 import { createLogger } from './lib/log.js';
@@ -176,7 +178,7 @@ program
         harvest,
         get,
         endpoints: DEFAULT_ENDPOINTS,
-        pick: anthropicPick(client, harvest.picker.model),
+        pick: anthropicPick(client, harvest.picker.model, modelCallRecorder(db, verticalId)),
         prompt: loadPickPrompt(paths.root),
         limit,
         log,
@@ -238,8 +240,8 @@ program
         enrich,
         get: cachedGet(opts.refresh === true),
         endpoints: DEFAULT_WIKI_ENDPOINTS,
-        write: anthropicWriter(client, enrich.writer_model),
-        check: anthropicChecker(client, enrich.checker_model),
+        write: anthropicWriter(client, enrich.writer_model, modelCallRecorder(db, verticalId)),
+        check: anthropicChecker(client, enrich.checker_model, modelCallRecorder(db, verticalId)),
         prompts,
         limit,
         retryFailed: opts.retryFailed === true,
@@ -368,14 +370,14 @@ program
     // verbatim and needs no check, which today is every caption, so demanding a key here would
     // refuse the command to anyone without one for a call that would never be made.
     let checker: ModelFn | undefined;
-    const check: ModelFn = (system, user) => {
+    const check: ModelFn = (system, user, tag) => {
       if (checker === undefined) {
         if (!process.env.ANTHROPIC_API_KEY?.trim()) {
           throw new Error('a caption is not verbatim approved text and must be fact-checked, but ANTHROPIC_API_KEY is not set');
         }
-        checker = anthropicChecker(new Anthropic({ timeout: 600_000, maxRetries: 2 }), enrich.checker_model);
+        checker = anthropicChecker(new Anthropic({ timeout: 600_000, maxRetries: 2 }), enrich.checker_model, modelCallRecorder(db, verticalId));
       }
-      return checker(system, user);
+      return checker(system, user, tag);
     };
 
     const report = await runStage(db, { stage: 'caption', verticalId }, () =>
@@ -392,6 +394,19 @@ program
     for (const item of report.items) console.log(describeCaption(item));
     console.log(`post ${report.postId}: ${report.written} written, ${report.failed} failed; fact checks run: ${report.checked}`);
     if (report.failed > 0) process.exitCode = 1;
+  });
+
+program
+  .command('costs')
+  .description('Report what the Claude calls recorded for a vertical cost, per stage, per book and per quote')
+  .requiredOption('--vertical <slug>', 'the vertical to report on')
+  .option('--json', 'emit JSON instead of a table')
+  .action((opts: { vertical: string; json?: boolean }) => {
+    const db = openMigratedDb();
+    const { verticalId } = findVertical(db, opts.vertical);
+    const report = costReport(db, verticalId, loadPricing(paths.root));
+    console.log(opts.json ? JSON.stringify(report, null, 2) : formatCostReport(report));
+    if (report.unpriced.length > 0) process.exitCode = 1;
   });
 
 program

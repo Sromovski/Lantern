@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CallTag } from '../lib/usage.js';
 
 /** What the model returns: candidate numbers as shown in the prompt (1-based), each with a one-sentence reason. */
 export const pickResultSchema = z.object({
@@ -6,7 +7,7 @@ export const pickResultSchema = z.object({
 });
 
 /** Sends one batch (system prompt, user message) to the model and resolves to its structured output. */
-export type PickFn = (system: string, user: string) => Promise<unknown>;
+export type PickFn = (system: string, user: string, tag?: CallTag) => Promise<unknown>;
 
 /** The model's output for one batch is unusable. Only that batch is skipped. */
 export class PickerResponseError extends Error {

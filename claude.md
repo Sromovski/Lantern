@@ -135,7 +135,8 @@ four and taken on the fifth is not free.
   `node <absolute path>\dist\src\cli.js` needs none. `lantern doctor` exits
   1 on any failed check and 0 otherwise.
 - **Config:** `.env` for secrets (never committed), `config/verticals/*.yaml`
-  for vertical definitions, `config/channels/*.yaml` for destinations.
+  for vertical definitions, `config/channels/*.yaml` for destinations,
+  `config/pricing.yaml` for the Claude prices `lantern costs` applies.
 - **Logging:** structured JSON lines to `logs/`, plus a human-readable run
   summary. Every publish writes an audit row.
 - Tests with `vitest`. The verification logic (§8) is the part that most needs
@@ -154,6 +155,7 @@ lantern/
       literature-facebook.yaml
       literature-pinterest.yaml
       science-youtube.yaml
+    pricing.yaml        # Claude API $ per million tokens, per model
   data/
     lantern.db
     media/
@@ -189,6 +191,7 @@ lantern/
     schedule/           # queue selection, cadence, spacing
     review/             # local web UI for the review queue
     doctor/             # health checks (lantern doctor)
+    costs/              # what the recorded Claude calls cost (lantern costs)
     lib/                # logging, run_log stage wrapper, paths, http client + response cache + streaming download
   tests/
   logs/
@@ -446,6 +449,26 @@ CREATE TABLE publications (
   UNIQUE(idempotency_key)
 );
 
+-- Every Claude call, with the tokens the API reported, recorded before its answer is judged
+-- (an unusable answer is billed too). Prices are applied at report time from config/pricing.yaml.
+CREATE TABLE model_calls (
+  id                          INTEGER PRIMARY KEY,
+  vertical_id                 INTEGER REFERENCES verticals(id),
+  stage                       TEXT NOT NULL,     -- 'harvest'|'enrich'|'caption'
+  role                        TEXT NOT NULL,     -- 'picker'|'writer'|'reviser'|'checker'
+  item_id                     INTEGER REFERENCES items(id),   -- enrich calls
+  post_id                     INTEGER REFERENCES posts(id),   -- caption calls
+  gutenberg_id                INTEGER,                        -- harvest calls
+  requested_model             TEXT NOT NULL,
+  model                       TEXT NOT NULL,     -- the model billed (a fallback's, when one answered)
+  input_tokens                INTEGER NOT NULL,
+  output_tokens               INTEGER NOT NULL,  -- includes thinking tokens
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0,
+  stop_reason                 TEXT,
+  created_at                  TEXT NOT NULL
+);
+
 -- Pipeline observability.
 CREATE TABLE run_log (
   id            INTEGER PRIMARY KEY,
@@ -461,7 +484,8 @@ CREATE TABLE run_log (
 Indexes: `items(status, vertical_id)`, `items(body_hash)`,
 `posts(status, vertical_id)`, `renditions(post_id, status)`,
 `publications(status, scheduled_for)`, `publications(channel_id, published_at)`,
-`item_evidence(item_id)`, `run_log(stage, created_at)` (for `doctor` health checks that query by stage and time).
+`item_evidence(item_id)`, `model_calls(item_id)`, `model_calls(post_id)`,
+`model_calls(stage, created_at)`, `run_log(stage, created_at)` (for `doctor` health checks that query by stage and time).
 
 All TEXT timestamp columns hold UTC ISO-8601 strings with a `Z` suffix (as
 produced by `Date.prototype.toISOString()`), so they compare correctly as
@@ -636,6 +660,15 @@ Health check per channel: token validity and days-to-expiry, quota headroom, DB
 integrity (including missing guard triggers and migration files edited after they
 were applied), queue depth, last successful publish, disk usage. Run it daily; it
 is how you find out a token expired *before* a page goes quiet for a week.
+
+**`lantern costs --vertical literature`**
+What the recorded Claude calls cost: per stage and model, per book read by the
+picker (and per quote it picked), and per quote for its enrich and caption
+calls, with the mean per post and an all-in figure. Every picker, writer and
+checker call writes a `model_calls` row as soon as its response arrives, so a
+refused or truncated answer is counted too. Prices come from
+`config/pricing.yaml`; a model missing there is named and the command exits 1,
+rather than counting its calls as free.
 
 Every stage writes a `run_log` row on entry and exit — stage, vertical, channel,
 ok/failed, and a JSON detail blob. That table is what `doctor` reads and what

@@ -6,6 +6,7 @@ import { unapprovedSentences } from '../../src/caption/text.js';
 import { upsertCaption } from '../../src/db/captions.js';
 import type { Db } from '../../src/db/connection.js';
 import { insertPost, type NewPost } from '../../src/db/posts.js';
+import type { CallTag } from '../../src/lib/usage.js';
 import type { ModelFn, ModelAnswer } from '../../src/enrich/anthropic.js';
 import { testDb } from '../helpers/db.js';
 
@@ -22,13 +23,13 @@ const CLOSER = 'Read it and see how early the line arrives.';
 
 let db: Db;
 let postId: number;
-let asked: { system: string; user: string }[];
+let asked: { system: string; user: string; tag?: CallTag }[];
 /** Keeps each seeded item's body_hash unique; items are unique on (vertical_id, body_hash). */
 let seq: number;
 
 /** Answers every sentence "supported", which is what a caption of approved text should get. */
-const supportive: ModelFn = async (system, user) => {
-  asked.push({ system, user });
+const supportive: ModelFn = async (system, user, tag) => {
+  asked.push({ system, user, tag });
   const count = (user.match(/^\(\d+\)/gm) ?? []).length;
   const value = {
     sentences: Array.from({ length: count }, (_, i) => ({ id: i + 1, kind: 'other', supported: true, sources: ['Q'], problem: '' })),
@@ -212,6 +213,8 @@ describe('captionPost', () => {
     expect(asked).toHaveLength(1);
     // The title must appear in what the checker was shown - that was the defect in change 1.
     expect(asked[0]?.user).toContain('Dickens opened his new weekly');
+    // Tagged with the post, so the check is charged to the post's quote.
+    expect(asked[0]?.tag).toEqual({ stage: 'caption', postId: post });
   });
 
   it('writes no caption when the fact check refuses one', async () => {

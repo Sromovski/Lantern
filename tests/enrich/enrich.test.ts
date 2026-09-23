@@ -14,6 +14,7 @@ import { articleUrl, DEFAULT_WIKI_ENDPOINTS, entitiesUrl, workSearchUrl } from '
 import type { HarvestAuthor } from '../../src/harvest/gutendex.js';
 import { createHttpGet } from '../../src/harvest/sources.js';
 import { verifyVertical } from '../../src/verify/run.js';
+import type { CallTag } from '../../src/lib/usage.js';
 import { testDb } from '../helpers/db.js';
 
 const UA = 'Lantern/test (test@example.invalid)';
@@ -99,9 +100,9 @@ const refusal = (what: string) => new EnrichResponseError(`the ${what} stopped w
 
 /** A writer that answers with each draft in turn (repeating the last), or throws a given error. */
 function writer(...answers: (Draft | Error)[]) {
-  const calls: { system: string; user: string }[] = [];
-  const fn: ModelFn = async (system, user) => {
-    calls.push({ system, user });
+  const calls: { system: string; user: string; tag?: CallTag }[] = [];
+  const fn: ModelFn = async (system, user, tag) => {
+    calls.push({ system, user, tag });
     const next = answers[Math.min(calls.length, answers.length) - 1]!;
     if (next instanceof Error) throw next;
     return { value: next, model: 'claude-opus-5', inputTokens: 100, outputTokens: 50 };
@@ -111,9 +112,9 @@ function writer(...answers: (Draft | Error)[]) {
 
 /** A checker that judges the numbered sentences it is sent, finding unsupported only those marked UNSUPPORTED. */
 function checker() {
-  const calls: { system: string; user: string }[] = [];
-  const fn: ModelFn = async (system, user) => {
-    calls.push({ system, user });
+  const calls: { system: string; user: string; tag?: CallTag }[] = [];
+  const fn: ModelFn = async (system, user, tag) => {
+    calls.push({ system, user, tag });
     const sentences = [...user.matchAll(/^\((\d+)\) (.*)$/gm)].map((m) => ({ id: Number(m[1]), text: m[2]! }));
     const verdicts = sentences.map(({ id, text }) => {
       const flagged = text.includes('UNSUPPORTED');
@@ -230,11 +231,22 @@ describe('enrichVertical', () => {
     quote(DICKENS, BODY, 'A Tale of Two Cities');
     const write = writer(FLAWED, GOOD);
 
-    const report = await enrich(write.fn, checker().fn);
+    const check = checker();
+    const report = await enrich(write.fn, check.fn);
     expect(report.items[0]!.outcome).toMatchObject({ status: 'draft', rounds: 2, problems: [] });
     expect(write.calls[1]!.system).toBe('REVISE 2-4 short paragraphs');
     expect(write.calls[1]!.user).toContain('Problems the reviewer found:\n- "He was UNSUPPORTED the most famous man alive." is not supported by the source paragraphs: the sources do not say he was the most famous man alive');
     expect(write.calls[1]!.user).toContain(JSON.stringify(FLAWED, null, 2));
+    // Every call is tagged with its quote and role, so its tokens are charged to that quote.
+    const itemId = report.items[0]!.itemId;
+    expect(write.calls.map((c) => c.tag)).toEqual([
+      { stage: 'enrich', role: 'writer', itemId },
+      { stage: 'enrich', role: 'reviser', itemId },
+    ]);
+    expect(check.calls.map((c) => c.tag)).toEqual([
+      { stage: 'enrich', role: 'checker', itemId },
+      { stage: 'enrich', role: 'checker', itemId },
+    ]);
     const rounds = db.prepare('SELECT round, problems_json FROM post_rounds ORDER BY round').all() as { round: number; problems_json: string }[];
     expect(rounds.map((r) => [r.round, JSON.parse(r.problems_json).length])).toEqual([
       [1, 1],

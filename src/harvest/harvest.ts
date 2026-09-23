@@ -213,7 +213,9 @@ async function harvestBook(options: HarvestOptions, context: BookContext, now: (
   const candidates = extractCandidates(body.text);
   let picks: Awaited<ReturnType<typeof pickPassages>>;
   try {
-    picks = await pickPassages(options.pick, options.prompt, author, book.title, candidates, {
+    // Every batch for this book is tagged with it, so what the book cost to read can be reported.
+    const pick: PickFn = (system, user) => options.pick(system, user, { stage: 'harvest', gutenbergId: book.id });
+    picks = await pickPassages(pick, options.prompt, author, book.title, candidates, {
       batchSize: picker.batch_size,
       maxBatches: picker.max_batches_per_work,
       picksPerBatch: picker.picks_per_batch,

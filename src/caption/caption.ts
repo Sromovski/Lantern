@@ -142,7 +142,7 @@ async function judge(
   // The checker is shown everything the gate judged, title included. Judging on title + text while
   // showing the model only the text means an invented title buys a model call that cannot see it.
   const sentences = captionSentences(built.title === null ? built.text : `${built.title}\n\n${built.text}`);
-  const answer = await options.check(options.checkPrompt, captionCheckMessage(post, cited, sentences));
+  const answer = await options.check(options.checkPrompt, captionCheckMessage(post, cited, sentences), { stage: 'caption', postId: post.postId });
   const parsed = checkSchema.safeParse(answer.value);
   if (!parsed.success) throw new CaptionError(`the fact check for the caption was not the expected shape: ${parsed.error.message}`);
   problems.push(...checkProblems(parsed.data, sentences, new Set(cited.map((source) => source.label))));

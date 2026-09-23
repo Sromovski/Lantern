@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { anthropicPick, loadPickPrompt } from '../../src/harvest/anthropic-picker.js';
 import { PickerResponseError } from '../../src/harvest/picker.js';
+import type { RecordUsage } from '../../src/lib/usage.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const servers: Server[] = [];
@@ -88,5 +89,19 @@ describe('anthropicPick', () => {
 
   it('loads the committed picker prompt', () => {
     expect(loadPickPrompt(ROOT)).toContain('You can only choose by number.');
+  });
+});
+
+describe('anthropicPick usage recording', () => {
+  it('records every batch under its book, including one whose answer is unusable', async () => {
+    const { client } = await fakeApi([{ status: 200, body: message('{"picks":[]}') }, { status: 200, body: message('', 'refusal') }]);
+    const calls: Parameters<RecordUsage>[] = [];
+    const pick = anthropicPick(client, 'claude-sonnet-5', (tag, usage) => void calls.push([tag, usage]));
+    await pick('s', 'u', { stage: 'harvest', gutenbergId: 46 });
+    await expect(pick('s', 'u', { stage: 'harvest', gutenbergId: 46 })).rejects.toThrow(PickerResponseError);
+    expect(calls.map(([tag, usage]) => [tag, usage.inputTokens, usage.outputTokens, usage.stopReason])).toEqual([
+      [{ stage: 'harvest', role: 'picker', gutenbergId: 46 }, 10, 5, 'end_turn'],
+      [{ stage: 'harvest', role: 'picker', gutenbergId: 46 }, 10, 5, 'refusal'],
+    ]);
   });
 });

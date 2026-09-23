@@ -165,6 +165,18 @@ const standardRoutes = {
 };
 
 describe('harvestVertical', () => {
+  it('tags every picker batch with the book it reads, so what the book cost can be reported', async () => {
+    const tags: unknown[] = [];
+    const choose = pickWhere((t) => t.startsWith('Sentence one '));
+    const { options } = await setup(standardRoutes, (system, user, tag) => {
+      tags.push(tag);
+      return choose(system, user);
+    });
+    await harvestVertical(options);
+    expect(tags.length).toBeGreaterThan(0);
+    expect(new Set(tags.map((tag) => JSON.stringify(tag)))).toEqual(new Set([JSON.stringify({ stage: 'harvest', gutenbergId: 98 })]));
+  });
+
   it('harvests picked passages with their evidence, and verify then decides them', async () => {
     const { db, verticalId, hits, options } = await setup(standardRoutes, pickWhere((t) => t.startsWith('Sentence one ') || t === LISTED));
     const report = await harvestVertical(options);

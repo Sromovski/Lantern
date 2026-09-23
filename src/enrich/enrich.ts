@@ -174,7 +174,7 @@ async function sourceParagraphs(run: Run, item: ItemToEnrich): Promise<{ paragra
 }
 
 async function call(run: Run, itemId: number, role: string, fn: ModelFn, system: string, message: string): Promise<ModelAnswer> {
-  const answer = await fn(system, message);
+  const answer = await fn(system, message, { stage: 'enrich', role, itemId });
   run.options.log?.info('enrich call', { itemId, role, model: answer.model, inputTokens: answer.inputTokens, outputTokens: answer.outputTokens });
   return answer;
 }
