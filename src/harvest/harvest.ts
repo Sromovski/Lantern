@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { HarvestConfig } from '../config/schema.js';
 import type { Db } from '../db/connection.js';
-import { hasBookPick, insertHarvestedQuote, recordBookPick, upsertAuthorSubject } from '../db/quotes.js';
+import { authorQuoteCount, hasBookPick, insertHarvestedQuote, recordBookPick, upsertAuthorSubject } from '../db/quotes.js';
 import { errorReason } from '../lib/http.js';
 import type { Logger } from '../lib/log.js';
 import { locateQuoteIn, prepareHaystack } from '../verify/normalize.js';
@@ -101,7 +101,9 @@ const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
  * Harvests quotes for a vertical's configured authors (spec section 7, `lantern harvest`).
  *
  * Authors take turns: each round gives every author still in play their next unpicked book, so the
- * backlog mixes subjects (spec section 12) instead of draining one author first. An author is read on
+ * backlog mixes subjects (spec section 12) instead of draining one author first. Each run starts with
+ * the author who has the fewest raw or verified quotes, ties in configured order, so a run stopped by
+ * the limit still reaches the others over successive runs. An author is read on
  * their first turn:
  * 1. Their subjects row is found or created, bound to their Wikidata id.
  * 2. Their Wikiquote page is read before anything else. If it cannot be read, the author is skipped
@@ -130,9 +132,13 @@ export async function harvestVertical(options: HarvestOptions): Promise<HarvestR
     loaded: null,
   }));
   const report: HarvestReport = { inserted: 0, authors: states.map((state) => state.report) };
+  // The rounds start with the author who has the fewest quotes, ties in configured order. Starting
+  // every run with the first configured author meant a run stopped by --limit never reached the rest.
+  const held = new Map(states.map((state) => [state, authorQuoteCount(options.db, options.verticalId, state.author.wikidata_id)]));
+  const turns = [...states].sort((a, b) => held.get(a)! - held.get(b)!);
 
-  while (report.inserted < options.limit && states.some((state) => !state.done)) {
-    for (const state of states) {
+  while (report.inserted < options.limit && turns.some((state) => !state.done)) {
+    for (const state of turns) {
       if (report.inserted >= options.limit) break;
       if (state.done) continue;
       const loaded = state.loaded ?? (await loadAuthor(options, state, now));

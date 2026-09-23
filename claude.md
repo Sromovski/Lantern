@@ -520,7 +520,9 @@ book without such a heading is skipped. A Claude picker chooses among them by
 number; it never supplies text. Books of letters, speeches, correspondence,
 memoirs, diaries, journals or notebooks are not harvested, since they usually
 carry an editor's prose. Authors take turns, one book each per round, so the
-backlog mixes subjects. On an author's first turn their Wikiquote page is read
+backlog mixes subjects, and each run starts with the author who has the fewest
+raw or verified quotes (ties in configured order), so a run cut short by
+`--limit` does not always go to the first author. On an author's first turn their Wikiquote page is read
 first; a redirect, a different page title, or a Misattributed or Disputed
 section under a heading the check does not recognise counts as unreadable. If
 that page, their Gutendex results or their subject row cannot be used, the

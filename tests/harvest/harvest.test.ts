@@ -288,6 +288,43 @@ describe('harvestVertical', () => {
     expect(hits.filter((h) => h.startsWith('/ebooks/'))).toEqual(['/ebooks/98.txt.utf-8', '/ebooks/158.txt.utf-8', '/ebooks/1400.txt.utf-8', '/ebooks/1342.txt.utf-8']);
   });
 
+  it('starts each run with the author who has the fewest quotes, so a limited run does not always go to the first author', async () => {
+    const routes = {
+      [WIKIQUOTE_PATH]: wikiquote('Charles Dickens'),
+      [wikiquotePath('Jane Austen')]: wikiquote('Jane Austen'),
+      [SEARCH_PATH]: page([
+        book(98, 'A Tale of Two Cities', 'https://www.gutenberg.org/ebooks/98.txt.utf-8'),
+        book(1400, 'Great Expectations', 'https://www.gutenberg.org/ebooks/1400.txt.utf-8'),
+      ]),
+      '/books/?languages=en&search=austen': page([bookBy(AUSTEN)(158, 'Emma', 'https://www.gutenberg.org/ebooks/158.txt.utf-8')]),
+      '/ebooks/98.txt.utf-8': text(gutenberg('A Tale of Two Cities', ['CHAPTER I.', '', ...prose(' of the first novel')])),
+      '/ebooks/1400.txt.utf-8': text(gutenberg('Great Expectations', ['CHAPTER I.', '', ...prose(' of the second novel')])),
+      '/ebooks/158.txt.utf-8': text(gutenberg('Emma', ['CHAPTER I', '', ...prose(' of the third novel')])),
+    };
+    const { options } = await setup(routes, pickWhere((t) => t.startsWith('Sentence one ')), {
+      harvest: { authors: [DICKENS, AUSTEN], picker: PICKER },
+      limit: 1,
+    });
+    const books = (report: Awaited<ReturnType<typeof harvestVertical>>) =>
+      report.authors.map((a) => [a.author, a.books.filter((b) => b.outcome.status === 'harvested').map((b) => b.gutenbergId)]);
+
+    // A tie goes to the configured order, so the first run reads Dickens.
+    expect(books(await harvestVertical(options))).toEqual([
+      ['Charles Dickens', [98]],
+      ['Jane Austen', []],
+    ]);
+    // Dickens now has a quote and Austen none, so the second run reads Austen before Dickens's next book.
+    expect(books(await harvestVertical(options))).toEqual([
+      ['Charles Dickens', []],
+      ['Jane Austen', [158]],
+    ]);
+    // Level again: Dickens first, with his next book.
+    expect(books(await harvestVertical(options))).toEqual([
+      ['Charles Dickens', [1400]],
+      ['Jane Austen', []],
+    ]);
+  });
+
   it('records an attribution conflict when another author\'s book has a passage already harvested, so verify rejects it', async () => {
     const routes = {
       [WIKIQUOTE_PATH]: wikiquote('Charles Dickens'),

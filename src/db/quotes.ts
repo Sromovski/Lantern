@@ -148,6 +148,17 @@ export function hasBookPick(db: Db, verticalId: number, gutenbergId: number, pro
   );
 }
 
+/** Quotes in a vertical by the author with this Wikidata id that are raw or verified; a rejected quote is not in the backlog. */
+export function authorQuoteCount(db: Db, verticalId: number, wikidataId: string): number {
+  return db
+    .prepare(
+      `SELECT COUNT(*) FROM items i JOIN subjects s ON s.id = i.subject_id
+       WHERE i.vertical_id = ? AND s.wikidata_id = ? AND i.kind = 'quote' AND i.status != 'rejected'`,
+    )
+    .pluck()
+    .get(verticalId, wikidataId) as number;
+}
+
 /** Records that the picker judged a book with this prompt and model. A repeat updates the counts. */
 export function recordBookPick(db: Db, pick: BookPick, now: Date = new Date()): void {
   db.prepare(
