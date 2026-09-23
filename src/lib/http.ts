@@ -195,9 +195,13 @@ export async function fetchWithRetry(req: HttpRequest, opts: HttpOptions): Promi
       const reason = unsupportedBodyReason(res.headers.get('content-type'));
       if (reason !== null) {
         await res.body?.cancel().catch(() => {});
-        throw new UnsupportedBodyError(req.url, reason);
+        // A 429 or 5xx is judged by its status, not its error page: Gutendex answers a 503 with an
+        // iso-8859-1 page, and refusing that body stopped a passing outage from being retried.
+        if (!isRetryableStatus(res.status)) throw new UnsupportedBodyError(req.url, reason);
+        body = '';
+      } else {
+        body = await res.text();
       }
-      body = await res.text();
     } catch (err) {
       if (err instanceof UnsupportedBodyError) throw err;
       if (!retryAll) {

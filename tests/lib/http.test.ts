@@ -246,6 +246,22 @@ describe('fetchWithRetry', () => {
     },
   );
 
+  it('retries a 503 whose error page is in an unsupported charset, as Gutendex sends, and returns the later answer', async () => {
+    const outage = { status: 503, headers: { 'content-type': 'text/html; charset=iso-8859-1' }, body: '<h1>Service Unavailable</h1>' };
+    const srv = await scriptedServer([outage, { status: 200, headers: { 'content-type': 'application/json' }, body: '{"ok":true}' }]);
+    const { sleep, calls } = recordingSleep();
+    expect(await fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep })).toMatchObject({ status: 200, body: '{"ok":true}' });
+    expect(srv.seen).toHaveLength(2);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('returns the status with an empty body when a retryable status in an unsupported charset never clears', async () => {
+    const srv = await scriptedServer([{ status: 503, headers: { 'content-type': 'text/html; charset=iso-8859-1' }, body: 'x' }]);
+    const { sleep } = recordingSleep();
+    expect(await fetchWithRetry({ url: srv.base }, { userAgent: UA, sleep, maxAttempts: 2 })).toMatchObject({ status: 503, body: '' });
+    expect(srv.seen).toHaveLength(2);
+  });
+
   it.each(['application/json', 'application/ld+json', 'text/html; charset=UTF-8'])(
     'accepts the text body type %s',
     async (contentType) => {
